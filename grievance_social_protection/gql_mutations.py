@@ -1,14 +1,15 @@
 import graphene
-
-from core.gql.gql_mutations.base_mutation import BaseHistoryModelCreateMutationMixin, BaseMutation, \
-    BaseHistoryModelUpdateMutationMixin, BaseHistoryModelDeleteMutationMixin
+from core.gql.gql_mutations.base_mutation import (
+    BaseHistoryModelCreateMutationMixin,
+    BaseMutation,
+    BaseHistoryModelUpdateMutationMixin,
+    BaseHistoryModelDeleteMutationMixin,
+)
 from core.schema import OpenIMISMutation
 from .models import Ticket, TicketMutation, Comment
-
 from django.core.exceptions import ValidationError, PermissionDenied
 from .apps import TicketConfig
 from django.utils.translation import gettext_lazy as _
-
 from .services import TicketService, CommentService
 from .validations import user_associated_with_ticket
 
@@ -65,18 +66,20 @@ class CreateTicketMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
 
     @classmethod
     def _mutate(cls, user, **data):
-        client_mutation_id = data.pop('client_mutation_id')
+        client_mutation_id = data.pop("client_mutation_id")
         if "client_mutation_label" in data:
-            data.pop('client_mutation_label')
+            data.pop("client_mutation_label")
 
         service = TicketService(user)
         response = service.create(data)
         if client_mutation_id:
-            ticket_id = response['data']['id']
+            ticket_id = response["data"]["id"]
             ticket = Ticket.objects.get(id=ticket_id)
-            TicketMutation.object_mutated(user, client_mutation_id=client_mutation_id, ticket=ticket)
+            TicketMutation.object_mutated(
+                user, client_mutation_id=client_mutation_id, ticket=ticket
+            )
 
-        if not response['success']:
+        if not response["success"]:
             return response
         return None
 
@@ -97,17 +100,19 @@ class UpdateTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
 
     @classmethod
     def _mutate(cls, user, **data):
-        client_mutation_id = data.pop('client_mutation_id')
+        client_mutation_id = data.pop("client_mutation_id")
         if "client_mutation_label" in data:
-            data.pop('client_mutation_label')
+            data.pop("client_mutation_label")
 
         service = TicketService(user)
         response = service.update(data)
         if client_mutation_id:
-            ticket_id = response['data']['id']
+            ticket_id = response["data"]["id"]
             ticket = Ticket.objects.get(id=ticket_id)
-            TicketMutation.object_mutated(user, client_mutation_id=client_mutation_id, ticket=ticket)
-        if not response['success']:
+            TicketMutation.object_mutated(
+                user, client_mutation_id=client_mutation_id, ticket=ticket
+            )
+        if not response["success"]:
             return response
         return None
 
@@ -123,8 +128,7 @@ class DeleteTicketMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(
-                TicketConfig.gql_mutation_delete_tickets_perms):
+        if not user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
             raise ValidationError("mutation.authentication_required")
 
     class Input(OpenIMISMutation.Input):
@@ -148,16 +152,16 @@ class CreateCommentMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
     @classmethod
     def _mutate(cls, user, **data):
         if "client_mutation_id" in data:
-            data.pop('client_mutation_id')
+            data.pop("client_mutation_id")
         if "client_mutation_label" in data:
-            data.pop('client_mutation_label')
+            data.pop("client_mutation_label")
 
         if "commenter_type" in data:
-            data['commenter_type'] = data.get('commenter_type', '').lower()
+            data["commenter_type"] = data.get("commenter_type", "").lower()
         service = CommentService(user)
         response = service.create(data)
 
-        if not response['success']:
+        if not response["success"]:
             return response
         return None
 
@@ -165,7 +169,9 @@ class CreateCommentMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
         pass
 
 
-class ResolveGrievanceByCommentMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+class ResolveGrievanceByCommentMutation(
+    BaseHistoryModelUpdateMutationMixin, BaseMutation
+):
     _mutation_class = "ResolveGrievanceByCommentMutation"
     _mutation_module = "grievance_social_protection"
     _model = Comment
@@ -178,18 +184,20 @@ class ResolveGrievanceByCommentMutation(BaseHistoryModelUpdateMutationMixin, Bas
 
     @classmethod
     def _mutate(cls, user, **data):
-        client_mutation_id = data.pop('client_mutation_id')
+        client_mutation_id = data.pop("client_mutation_id")
         if "client_mutation_label" in data:
-            data.pop('client_mutation_label')
+            data.pop("client_mutation_label")
 
         service = CommentService(user)
         response = service.resolve_grievance_by_comment(data)
         if client_mutation_id:
-            comment_id = data.get('id')
+            comment_id = data.get("id")
             ticket = Comment.objects.get(id=comment_id).ticket
-            TicketMutation.object_mutated(user, client_mutation_id=client_mutation_id, ticket=ticket)
+            TicketMutation.object_mutated(
+                user, client_mutation_id=client_mutation_id, ticket=ticket
+            )
 
-        if not response['success']:
+        if not response["success"]:
             return response
         return None
 
@@ -210,23 +218,26 @@ class ReopenTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
 
     @classmethod
     def _mutate(cls, user, **data):
-        client_mutation_id = data.pop('client_mutation_id')
+        client_mutation_id = data.pop("client_mutation_id")
         if "client_mutation_label" in data:
-            data.pop('client_mutation_label')
+            data.pop("client_mutation_label")
 
         service = TicketService(user)
         response = service.reopen_ticket(data)
         if client_mutation_id:
-            ticket_id = data.get('id')
+            ticket_id = data.get("id")
             ticket = Ticket.objects.get(id=ticket_id)
-            TicketMutation.object_mutated(user, client_mutation_id=client_mutation_id, Ticket=ticket)
+            TicketMutation.object_mutated(
+                user, client_mutation_id=client_mutation_id, Ticket=ticket
+            )
 
-        if not response['success']:
+        if not response["success"]:
             return response
         return None
 
     class Input(ResolveGrievanceByCommentInputType):
         pass
+
 
 # class CreateTicketAttachmentMutation(OpenIMISMutation):
 #     _mutation_module = "grievance_social_protection"

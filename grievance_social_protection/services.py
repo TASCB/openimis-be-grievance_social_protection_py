@@ -2,6 +2,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import Max
 from django.db import transaction
+from core import TimeUtils
 from core.services import BaseService
 from core.signals import register_service_signal
 from core.services.utils import (
@@ -188,18 +189,69 @@ class GrievanceCategoryService(BaseService):
     OBJECT_TYPE = GrievanceCategory
 
     def __init__(self, user):
-        super().__init__(user, None)
+        super().__init__(user)
+
+    def _adjust_create_payload(self, payload_data):
+        payload_data["user_created"] = self.user
+        payload_data["user_updated"] = self.user
+        payload_data["date_created"] = TimeUtils.now()
+        payload_data["date_updated"] = TimeUtils.now()
+        return payload_data
+
+    def _adjust_update_payload(self, payload_data):
+        payload_data["user_updated"] = self.user
+        payload_data["date_updated"] = TimeUtils.now()
+        return super()._adjust_update_payload(payload_data)
+
+    def save_instance(self, obj_):
+        obj_.save(username=self.user.username)
+        dict_repr = model_representation(obj_)
+        return output_result_success(dict_representation=dict_repr)
 
 
 class GrievanceTypeService(BaseService):
     OBJECT_TYPE = GrievanceType
 
     def __init__(self, user):
-        super().__init__(user, None)
+        super().__init__(user)
+
+    def _adjust_create_payload(self, payload_data):
+        payload_data["user_created"] = self.user
+        payload_data["user_updated"] = self.user
+        payload_data["date_created"] = TimeUtils.now()
+        payload_data["date_updated"] = TimeUtils.now()
+        return payload_data
+
+    def _adjust_update_payload(self, payload_data):
+        payload_data["user_updated"] = self.user
+        payload_data["date_updated"] = TimeUtils.now()
+        return super()._adjust_update_payload(payload_data)
+
+    def save_instance(self, obj_):
+        obj_.save(username=self.user.username)
+        dict_repr = model_representation(obj_)
+        return output_result_success(dict_representation=dict_repr)
 
 
 class GrievanceChannelService(BaseService):
     OBJECT_TYPE = GrievanceChannel
 
     def __init__(self, user):
-        super().__init__(user, None)
+        super().__init__(user)
+
+    def _adjust_create_payload(self, payload_data):
+        payload_data["user_created"] = self.user
+        payload_data["user_updated"] = self.user
+        payload_data["date_created"] = TimeUtils.now()
+        payload_data["date_updated"] = TimeUtils.now()
+        return payload_data
+
+    def _adjust_update_payload(self, payload_data):
+        payload_data["user_updated"] = self.user
+        payload_data["date_updated"] = TimeUtils.now()
+        return super()._adjust_update_payload(payload_data)
+
+    def save_instance(self, obj_):
+        obj_.save(username=self.user.username)
+        dict_repr = model_representation(obj_)
+        return output_result_success(dict_representation=dict_repr)

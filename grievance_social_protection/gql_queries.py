@@ -351,6 +351,7 @@ class GrievanceCategoryGQL(DjangoObjectType):
             "code": ["exact", "icontains"],
             "name": ["exact", "icontains"],
             "is_active": ["exact"],
+            "type__id": ["exact"],
             "type__name": ["exact", "icontains"],
         }
         connection_class = ExtendedConnection

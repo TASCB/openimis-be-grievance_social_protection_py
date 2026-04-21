@@ -93,6 +93,68 @@ class TicketMutation(core_models.UUIDModel, core_models.ObjectMutation):
         db_table = "ticket_TicketMutation"
 
 
+class TicketAttachment(
+    core_models.UUIDModel,
+    core_models.UUIDVersionedModel,
+):
+    ticket = models.ForeignKey(
+        Ticket,
+        models.DO_NOTHING,
+        related_name="attachment",
+        db_column="TicketId",
+        blank=True,
+        null=True,
+    )
+    filename = models.TextField(max_length=1000, blank=True, null=True)
+    mime_type = models.TextField(max_length=255, blank=True, null=True)
+    url = models.TextField(max_length=1000, blank=True, null=True)
+    document = models.TextField(blank=True, null=True)
+    # date = fields.DateField(blank=True, default=py_datetime.now)
+
+    def __str__(self):
+        return f"{self.filename}"
+
+    # def full_file_path(self):
+    #     if not TicketConfig.tickets_attachments_root_path or not self.filename:
+    #         return None
+    #     return os.path.join(TicketConfig.tickets_attachments_root_path, self.filename)
+
+    class Meta:
+        managed = True
+        db_table = "tblTicketAttachment"
+
+    @classmethod
+    def filter_queryset(cls, queryset=None):
+        if queryset is None:
+            queryset = cls.objects.all()
+        queryset = queryset.filter(*core.filter_validity())
+        return queryset
+
+    @classmethod
+    def get_queryset(cls, queryset, user):
+        queryset = cls.filter_queryset(queryset)
+        if isinstance(user, ResolveInfo):
+            user = user.context.user
+        if settings.ROW_SECURITY and user.is_anonymous:
+            return queryset.filter(id=None)
+        if settings.ROW_SECURITY:
+            pass
+        return queryset
+
+
+class AttachmentMutation(core_models.UUIDModel, core_models.ObjectMutation):
+    ticket = models.ForeignKey(
+        TicketAttachment, models.DO_NOTHING, related_name="mutations"
+    )
+    mutation = models.ForeignKey(
+        core_models.MutationLog, models.DO_NOTHING, related_name="attachment"
+    )
+
+    class Meta:
+        managed = True
+        db_table = "ticket_AttachmentMutation"
+
+
 class Comment(HistoryModel):
     ticket = models.ForeignKey(
         Ticket, on_delete=models.DO_NOTHING, null=False, blank=False

@@ -8,6 +8,7 @@ from core.utils import append_validity_filter
 from .apps import MODULE_NAME
 from .gql_queries import *
 from .gql_mutations import *
+from graphql_relay import from_global_id
 from django.utils.translation import gettext_lazy as _
 from .gql_queries import GrievanceTypeGQL, GrievanceCategoryGQL
 
@@ -144,7 +145,6 @@ class Query(graphene.ObjectType):
         user = info.context.user
         if not user.has_perms(TicketConfig.gql_query_tickets_perms):
             raise PermissionDenied(_("unauthorized"))
-
         qs = GrievanceType.objects.all()
         if is_active is not None:
             qs = qs.filter(is_active=is_active)
@@ -156,10 +156,11 @@ class Query(graphene.ObjectType):
         user = info.context.user
         if not user.has_perms(TicketConfig.gql_query_tickets_perms):
             raise PermissionDenied(_("unauthorized"))
-
         qs = GrievanceCategory.objects.select_related("type").all()
         if type_id:
-            qs = qs.filter(type_id=type_id)
+            # Decode the Relay Global ID to get the raw UUID
+            _type, uuid = from_global_id(type_id)
+            qs = qs.filter(type_id=uuid)
         if is_active is not None:
             qs = qs.filter(is_active=is_active)
         return qs

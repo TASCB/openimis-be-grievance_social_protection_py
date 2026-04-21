@@ -52,8 +52,14 @@ class CommentValidation(ObjectExistsValidationMixin):
 
     @classmethod
     def validate_resolve_grievance_by_comment(cls, user, **data):
-        cls.validate_object_exists(data.get('id'))
         errors = []
+        comment_id = data.get("id")
+        if comment_id:
+            cls.validate_object_exists(comment_id)
+        else:
+            errors.extend(validate_ticket_exists(data))
+            if not (data.get("comment") or "").strip():
+                errors.append({"message": _("Closing comment is required")})
         if errors:
             raise ValidationError(errors)
 

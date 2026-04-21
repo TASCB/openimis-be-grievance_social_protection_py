@@ -59,6 +59,23 @@ class ResolveGrievanceByCommentInputType(OpenIMISMutation.Input):
     id = graphene.UUID(required=True)
 
 
+class CloseTicketInputType(OpenIMISMutation.Input):
+    id = graphene.UUID(required=True)
+    title = graphene.String(required=False)
+    description = graphene.String(required=False)
+    attending_staff_id = graphene.UUID(required=False)
+    date_of_incident = graphene.Date(required=False)
+    priority = graphene.String(required=False)
+    due_date = graphene.Date(required=False)
+    category = graphene.String(required=False)
+    flags = graphene.String(required=False)
+    channel = graphene.String(required=False)
+    resolution = graphene.String(required=False)
+    commenter_type = graphene.String(required=False, max_lenght=255)
+    commenter_id = graphene.String(required=False, max_lenght=255)
+    comment = graphene.String(required=True)
+
+
 class CreateCommentInputType(OpenIMISMutation.Input):
     ticket_id = graphene.UUID(required=True)
     commenter_type = graphene.String(required=False, max_lenght=255)
@@ -249,6 +266,45 @@ class ReopenTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
         return None
 
     class Input(ResolveGrievanceByCommentInputType):
+        pass
+
+
+class CloseTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_class = "CloseTicketMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = Ticket
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not (
+            user.has_perms(TicketConfig.gql_mutation_update_tickets_perms)
+            and user.has_perms(TicketConfig.gql_mutation_resolve_grievance_perms)
+        ):
+            raise ValidationError("mutation.authentication_required")
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        client_mutation_id = data.pop("client_mutation_id")
+        if "client_mutation_label" in data:
+            data.pop("client_mutation_label")
+        if "commenter_type" in data and data["commenter_type"]:
+            data["commenter_type"] = data.get("commenter_type", "").lower()
+
+        service = TicketService(user)
+        response = service.close_ticket(data)
+        if client_mutation_id:
+            ticket_id = data.get("id")
+            ticket = Ticket.objects.get(id=ticket_id)
+            TicketMutation.object_mutated(
+                user, client_mutation_id=client_mutation_id, ticket=ticket
+            )
+
+        if not response["success"]:
+            return response
+        return None
+
+    class Input(CloseTicketInputType):
         pass
 
 

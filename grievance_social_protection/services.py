@@ -52,6 +52,85 @@ class TicketService(BaseService):
     def delete(self, obj_data):
         return super().delete(obj_data)
 
+    @register_service_signal("ticket_service.close_ticket")
+    @check_authentication
+    def close_ticket(self, obj_data):
+        try:
+            with transaction.atomic():
+                ticket_id = obj_data.get("id")
+                ticket = Ticket.objects.filter(id=ticket_id).first()
+                if not ticket:
+                    raise ValidationError("Ticket not found")
+
+                ticket_update_data = {
+                    key: value
+                    for key, value in obj_data.items()
+                    if key
+                    in {
+                        "title",
+                        "description",
+                        "attending_staff_id",
+                        "date_of_incident",
+                        "priority",
+                        "due_date",
+                        "category",
+                        "flags",
+                        "channel",
+                        "resolution",
+                    }
+                }
+
+                resolution_error = validate_resolution(ticket_update_data)
+                if resolution_error:
+                    raise ValidationError(resolution_error)
+                if ticket_update_data:
+                    self.validation_class.validate_update(
+                        self.user, id=ticket_id, **ticket_update_data
+                    )
+                    ticket.update(data=ticket_update_data, user=self.user, save=False)
+
+                comment_text = (obj_data.get("comment") or "").strip()
+                if not comment_text:
+                    raise ValidationError("Closing comment is required")
+
+                comment_payload = {"ticket_id": ticket_id, "comment": comment_text}
+                if obj_data.get("commenter_type"):
+                    comment_payload["commenter_type"] = obj_data.get("commenter_type")
+                if obj_data.get("commenter_id"):
+                    comment_payload["commenter_id"] = obj_data.get("commenter_id")
+                if comment_payload.get("commenter_type") == "user":
+                    comment_payload["commenter_id"] = str(self.user.id)
+
+                comment_service = CommentService(self.user)
+                comment_service._get_content_type(comment_payload)
+                comment_service.validation_class.validate_create(
+                    self.user, **comment_payload
+                )
+
+                comment = Comment(
+                    ticket=ticket,
+                    comment=comment_text,
+                    commenter_type=comment_payload.get("commenter_type"),
+                    commenter_id=comment_payload.get("commenter_id"),
+                    is_resolution=True,
+                )
+                comment.save(username=self.user.username)
+
+                comment_service._append_comment_id(ticket, comment.id)
+                ticket.status = Ticket.TicketStatus.CLOSED
+                ticket.save(username=self.user.username)
+                return {
+                    "success": True,
+                    "message": "Ok",
+                    "detail": "close_ticket",
+                }
+        except Exception as exc:
+            return output_exception(
+                model_name=self.OBJECT_TYPE.__name__,
+                method="close_ticket",
+                exception=exc,
+            )
+
     @register_service_signal("ticket_service.reopen_ticket")
     @check_authentication
     def reopen_ticket(self, obj_data):
@@ -139,12 +218,17 @@ class CommentService:
     def _update_ticket_comment_ids(self, ticket_id, comment_id):
         ticket = Ticket.objects.filter(id=ticket_id).first()
         if ticket:
-            json_ext = ticket.json_ext or {}
-            comment_ids = json_ext.get("comment_ids", [])
-            comment_ids.append(comment_id)
-            json_ext["comment_ids"] = comment_ids
-            ticket.json_ext = json_ext
+            self._append_comment_id(ticket, comment_id)
             ticket.save(username=self.user.username)
+
+    def _append_comment_id(self, ticket, comment_id):
+        json_ext = ticket.json_ext or {}
+        comment_ids = list(json_ext.get("comment_ids", []))
+        comment_id = str(comment_id)
+        if comment_id not in comment_ids:
+            comment_ids.append(comment_id)
+        json_ext["comment_ids"] = comment_ids
+        ticket.json_ext = json_ext
 
     @register_service_signal("comment_service.resolve_grievance_by_comment")
     @check_authentication
@@ -157,9 +241,11 @@ class CommentService:
                 comment = Comment.objects.filter(id=obj_data.get("id")).first()
                 ticket = comment.ticket
                 ticket.status = Ticket.TicketStatus.CLOSED
-                comment.is_resolution = True
+                self._append_comment_id(ticket, comment.id)
+                if not comment.is_resolution:
+                    comment.is_resolution = True
+                    comment.save(username=self.user.username)
                 ticket.save(username=self.user.username)
-                comment.save(username=self.user.username)
                 return {
                     "success": True,
                     "message": "Ok",

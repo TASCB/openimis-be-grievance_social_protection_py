@@ -54,3 +54,4 @@ class GQLTicketResolveByCommentTestCase(openIMISGraphQLTestCase):
         self.assertFalse(mutation_log.error)
         self.assertEquals(comment.is_resolution, True)
         self.assertEquals(ticket.status, self.status)
+        self.assertIn(str(comment.id), ticket.json_ext["comment_ids"])

@@ -75,6 +75,46 @@ mutation resolveGrievanceByComment {
 }
 """
 
+gql_mutation_close_ticket = """
+mutation closeTicket {
+  closeTicket(input: {
+    id: "%s",
+    category: "%s",
+    title: "%s",
+    resolution: "%s",
+    priority: "%s",
+    dateOfIncident: "%s",
+    channel: "%s",
+    flags: "%s",
+    comment: "%s",
+    clientMutationId: "%s"
+  }) {
+    clientMutationId
+  }
+}
+"""
+
+gql_mutation_close_ticket_by_user = """
+mutation closeTicket {
+  closeTicket(input: {
+    id: "%s",
+    category: "%s",
+    title: "%s",
+    resolution: "%s",
+    priority: "%s",
+    dateOfIncident: "%s",
+    channel: "%s",
+    flags: "%s",
+    commenterType: "user",
+    commenterId: "%s",
+    comment: "%s",
+    clientMutationId: "%s"
+  }) {
+    clientMutationId
+  }
+}
+"""
+
 gql_mutation_reopen_ticket = """
 mutation reopenTicket {
   reopenTicket(input: {

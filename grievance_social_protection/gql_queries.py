@@ -10,7 +10,7 @@ from .models import Ticket, Comment
 from core import prefix_filterset, ExtendedConnection
 from .util import model_obj_to_json
 from .validations import user_associated_with_ticket
-from .models import GrievanceType, GrievanceCategory
+from .models import GrievanceType, GrievanceCategory, GrievanceChannel
 
 
 def check_ticket_perms(info):
@@ -294,7 +294,12 @@ class GrievanceTypeConfigurationGQLType(ObjectType):
         return TicketConfig.grievance_flags
 
     def resolve_grievance_channels(self, info):
-        return TicketConfig.grievance_channels
+        channels = list(
+            GrievanceChannel.objects.filter(is_deleted=False, is_active=True)
+            .order_by("name")
+            .values_list("name", flat=True)
+        )
+        return channels or TicketConfig.grievance_channels
 
     def resolve_grievance_category_staff_roles(self, info):
         category_staff_role_list = []
@@ -320,11 +325,11 @@ class GrievanceTypeConfigurationGQLType(ObjectType):
         return category_resolution_time_list
 
 
-class GrievanceTypeGQL(DjangoObjectType):
-    categories = graphene.List(lambda: GrievanceCategoryGQL)
+class GrievanceCategoryGQL(DjangoObjectType):
+    types = graphene.List(lambda: GrievanceTypeGQL)
 
     class Meta:
-        model = GrievanceType
+        model = GrievanceCategory
         interfaces = (graphene.relay.Node,)
         fields = ("id", "code", "name", "is_active")
         filter_fields = {
@@ -335,27 +340,40 @@ class GrievanceTypeGQL(DjangoObjectType):
         }
         connection_class = ExtendedConnection
 
-    def resolve_categories(self, info):
-        return self.categories.filter(is_active=True)
+    def resolve_types(self, info):
+        return self.types.filter(is_active=True)
 
 
-class GrievanceCategoryGQL(DjangoObjectType):
-    type_name = graphene.String()
+class GrievanceTypeGQL(DjangoObjectType):
+    category_name = graphene.String()
 
     class Meta:
-        model = GrievanceCategory
+        model = GrievanceType
         interfaces = (graphene.relay.Node,)
-        fields = ("id", "code", "name", "is_active", "type")
+        fields = ("id", "code", "name", "is_active", "category")
         filter_fields = {
             "id": ["exact"],
             "code": ["exact", "icontains"],
             "name": ["exact", "icontains"],
             "is_active": ["exact"],
-            "type__id": ["exact"],
-            "type__name": ["exact", "icontains"],
+            "category__id": ["exact"],
+            "category__name": ["exact", "icontains"],
         }
         connection_class = ExtendedConnection
 
-    # extra resolver for type name
-    def resolve_type_name(self, info):
-        return self.type.name if self.type else None
+    def resolve_category_name(self, info):
+        return self.category.name if self.category else None
+
+
+class GrievanceChannelGQL(DjangoObjectType):
+    class Meta:
+        model = GrievanceChannel
+        interfaces = (graphene.relay.Node,)
+        fields = ("id", "code", "name", "is_active")
+        filter_fields = {
+            "id": ["exact"],
+            "code": ["exact", "icontains"],
+            "name": ["exact", "icontains"],
+            "is_active": ["exact"],
+        }
+        connection_class = ExtendedConnection

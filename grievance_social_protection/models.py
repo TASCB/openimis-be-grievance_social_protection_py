@@ -188,29 +188,47 @@ class Comment(HistoryModel):
                 )
 
 
-class GrievanceType(core_models.UUIDModel, HistoryBusinessModel):
-    code = models.CharField(max_length=50, unique=True, null=True, blank=True)
+class GrievanceCategory(core_models.UUIDModel, HistoryBusinessModel):
+    code = models.CharField(max_length=50, null=True, blank=True)
     name = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
 
     class Meta:
-        db_table = "grievance_GrievanceType"
+        db_table = "grievance_GrievanceCategory"
 
     def __str__(self):
         return self.name
 
 
-class GrievanceCategory(core_models.UUIDModel, HistoryBusinessModel):
-    code = models.CharField(max_length=50, null=True, blank=True)
+class GrievanceType(core_models.UUIDModel, HistoryBusinessModel):
+    code = models.CharField(max_length=50, unique=True, null=True, blank=True)
     name = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
-    type = models.ForeignKey(
-        GrievanceType, on_delete=models.DO_NOTHING, related_name="categories"
+    category = models.ForeignKey(
+        GrievanceCategory,
+        on_delete=models.DO_NOTHING,
+        related_name="types",
+        null=True,
+        blank=True,
     )
 
     class Meta:
-        db_table = "grievance_GrievanceCategory"
-        unique_together = ("type", "name")
+        db_table = "grievance_GrievanceType"
+        unique_together = ("category", "name")
 
     def __str__(self):
-        return f"{self.type.name} - {self.name}"
+        if self.category:
+            return f"{self.category.name} - {self.name}"
+        return self.name
+
+
+class GrievanceChannel(core_models.UUIDModel, HistoryBusinessModel):
+    code = models.CharField(max_length=50, null=True, blank=True)
+    name = models.CharField(max_length=255, unique=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "grievance_GrievanceChannel"
+
+    def __str__(self):
+        return self.name

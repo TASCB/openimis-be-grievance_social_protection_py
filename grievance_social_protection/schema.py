@@ -10,7 +10,7 @@ from .gql_queries import *
 from .gql_mutations import *
 from graphql_relay import from_global_id
 from django.utils.translation import gettext_lazy as _
-from .gql_queries import GrievanceTypeGQL, GrievanceCategoryGQL
+from .gql_queries import GrievanceTypeGQL, GrievanceCategoryGQL, GrievanceChannelGQL
 
 
 class Query(graphene.ObjectType):
@@ -43,13 +43,21 @@ class Query(graphene.ObjectType):
 
     grievance_types = OrderedDjangoFilterConnectionField(
         GrievanceTypeGQL,
-        description="Query all grievance types, optionally filter by active status",
+        orderBy=graphene.List(of_type=graphene.String),
+        category_id=graphene.ID(),
+        description="Query all grievance types, optionally filter by category or active status",
     )
 
     grievance_categories = OrderedDjangoFilterConnectionField(
         GrievanceCategoryGQL,
-        type_id=graphene.ID(),
-        description="Query all grievance categories, optionally filter by type or active status",
+        orderBy=graphene.List(of_type=graphene.String),
+        description="Query all grievance categories, optionally filter by active status",
+    )
+
+    grievance_channels = OrderedDjangoFilterConnectionField(
+        GrievanceChannelGQL,
+        orderBy=graphene.List(of_type=graphene.String),
+        description="Query all grievance channels, optionally filter by active status",
     )
 
     def resolve_comments(self, info, **kwargs):
@@ -141,26 +149,32 @@ class Query(graphene.ObjectType):
             raise PermissionDenied(_("unauthorized"))
         return GrievanceTypeConfigurationGQLType()
 
-    def resolve_grievance_types(self, info, is_active=None, **kwargs):
+    def resolve_grievance_types(self, info, category_id=None, is_active=None, **kwargs):
         user = info.context.user
         if not user.has_perms(TicketConfig.gql_query_tickets_perms):
             raise PermissionDenied(_("unauthorized"))
-        qs = GrievanceType.objects.all()
+        qs = GrievanceType.objects.select_related("category").all()
+        if category_id:
+            _type, uuid = from_global_id(category_id)
+            qs = qs.filter(category_id=uuid)
         if is_active is not None:
             qs = qs.filter(is_active=is_active)
         return qs
 
-    def resolve_grievance_categories(
-        self, info, type_id=None, is_active=None, **kwargs
-    ):
+    def resolve_grievance_categories(self, info, is_active=None, **kwargs):
         user = info.context.user
         if not user.has_perms(TicketConfig.gql_query_tickets_perms):
             raise PermissionDenied(_("unauthorized"))
-        qs = GrievanceCategory.objects.select_related("type").all()
-        if type_id:
-            # Decode the Relay Global ID to get the raw UUID
-            _type, uuid = from_global_id(type_id)
-            qs = qs.filter(type_id=uuid)
+        qs = GrievanceCategory.objects.all()
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active)
+        return qs
+
+    def resolve_grievance_channels(self, info, is_active=None, **kwargs):
+        user = info.context.user
+        if not user.has_perms(TicketConfig.gql_query_tickets_perms):
+            raise PermissionDenied(_("unauthorized"))
+        qs = GrievanceChannel.objects.all()
         if is_active is not None:
             qs = qs.filter(is_active=is_active)
         return qs
@@ -175,6 +189,18 @@ class Mutation(graphene.ObjectType):
 
     resolve_grievance_by_comment = ResolveGrievanceByCommentMutation.Field()
     reopen_ticket = ReopenTicketMutation.Field()
+
+    create_grievance_category = CreateGrievanceCategoryMutation.Field()
+    update_grievance_category = UpdateGrievanceCategoryMutation.Field()
+    delete_grievance_category = DeleteGrievanceCategoryMutation.Field()
+
+    create_grievance_type = CreateGrievanceTypeMutation.Field()
+    update_grievance_type = UpdateGrievanceTypeMutation.Field()
+    delete_grievance_type = DeleteGrievanceTypeMutation.Field()
+
+    create_grievance_channel = CreateGrievanceChannelMutation.Field()
+    update_grievance_channel = UpdateGrievanceChannelMutation.Field()
+    delete_grievance_channel = DeleteGrievanceChannelMutation.Field()
 
     # create_ticket_attachment = CreateTicketAttachmentMutation.Field()
     # update_ticket_attachment = UpdateTicketAttachmentMutation.Field()

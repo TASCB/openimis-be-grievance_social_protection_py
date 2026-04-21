@@ -6,11 +6,24 @@ from core.gql.gql_mutations.base_mutation import (
     BaseHistoryModelDeleteMutationMixin,
 )
 from core.schema import OpenIMISMutation
-from .models import Ticket, TicketMutation, Comment
+from .models import (
+    Ticket,
+    TicketMutation,
+    Comment,
+    GrievanceCategory,
+    GrievanceType,
+    GrievanceChannel,
+)
 from django.core.exceptions import ValidationError, PermissionDenied
 from .apps import TicketConfig
 from django.utils.translation import gettext_lazy as _
-from .services import TicketService, CommentService
+from .services import (
+    TicketService,
+    CommentService,
+    GrievanceCategoryService,
+    GrievanceTypeService,
+    GrievanceChannelService,
+)
 from .validations import user_associated_with_ticket
 
 
@@ -237,6 +250,235 @@ class ReopenTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
 
     class Input(ResolveGrievanceByCommentInputType):
         pass
+
+
+# ── GrievanceCategory mutations ──────────────────────────────────────────────
+
+class GrievanceCategoryInputType(OpenIMISMutation.Input):
+    id = graphene.String(required=False)
+    code = graphene.String(required=False)
+    name = graphene.String(required=True)
+    is_active = graphene.Boolean(required=False, default_value=True)
+
+
+class CreateGrievanceCategoryMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_class = "CreateGrievanceCategoryMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceCategory
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_create_tickets_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop("client_mutation_id", None)
+        data.pop("client_mutation_label", None)
+        service = GrievanceCategoryService(user)
+        response = service.create(data)
+        if not response["success"]:
+            return response
+        return None
+
+    class Input(GrievanceCategoryInputType):
+        pass
+
+
+class UpdateGrievanceCategoryMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_class = "UpdateGrievanceCategoryMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceCategory
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_update_tickets_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop("client_mutation_id", None)
+        data.pop("client_mutation_label", None)
+        service = GrievanceCategoryService(user)
+        response = service.update(data)
+        if not response["success"]:
+            return response
+        return None
+
+    class Input(GrievanceCategoryInputType):
+        id = graphene.String(required=True)
+
+
+class DeleteGrievanceCategoryMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_class = "DeleteGrievanceCategoryMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceCategory
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
+            raise ValidationError("mutation.authentication_required")
+        for cat_id in data.get("ids", []):
+            if GrievanceType.objects.filter(category_id=cat_id, is_deleted=False).exists():
+                raise ValidationError(
+                    "Cannot delete a category that has associated types. "
+                    "Delete or reassign the types first."
+                )
+
+    class Input(OpenIMISMutation.Input):
+        ids = graphene.List(graphene.UUID)
+
+
+# ── GrievanceType mutations ───────────────────────────────────────────────────
+
+class GrievanceTypeInputType(OpenIMISMutation.Input):
+    id = graphene.String(required=False)
+    code = graphene.String(required=False)
+    name = graphene.String(required=True)
+    is_active = graphene.Boolean(required=False, default_value=True)
+    category_id = graphene.String(required=False)
+
+
+class CreateGrievanceTypeMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_class = "CreateGrievanceTypeMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceType
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_create_tickets_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop("client_mutation_id", None)
+        data.pop("client_mutation_label", None)
+        service = GrievanceTypeService(user)
+        response = service.create(data)
+        if not response["success"]:
+            return response
+        return None
+
+    class Input(GrievanceTypeInputType):
+        pass
+
+
+class UpdateGrievanceTypeMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_class = "UpdateGrievanceTypeMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceType
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_update_tickets_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop("client_mutation_id", None)
+        data.pop("client_mutation_label", None)
+        service = GrievanceTypeService(user)
+        response = service.update(data)
+        if not response["success"]:
+            return response
+        return None
+
+    class Input(GrievanceTypeInputType):
+        id = graphene.String(required=True)
+
+
+class DeleteGrievanceTypeMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_class = "DeleteGrievanceTypeMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceType
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
+            raise ValidationError("mutation.authentication_required")
+
+    class Input(OpenIMISMutation.Input):
+        ids = graphene.List(graphene.UUID)
+
+
+# ── GrievanceChannel mutations ────────────────────────────────────────────────
+
+class GrievanceChannelInputType(OpenIMISMutation.Input):
+    id = graphene.String(required=False)
+    code = graphene.String(required=False)
+    name = graphene.String(required=True)
+    is_active = graphene.Boolean(required=False, default_value=True)
+
+
+class CreateGrievanceChannelMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_class = "CreateGrievanceChannelMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceChannel
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_create_tickets_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop("client_mutation_id", None)
+        data.pop("client_mutation_label", None)
+        service = GrievanceChannelService(user)
+        response = service.create(data)
+        if not response["success"]:
+            return response
+        return None
+
+    class Input(GrievanceChannelInputType):
+        pass
+
+
+class UpdateGrievanceChannelMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_class = "UpdateGrievanceChannelMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceChannel
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_update_tickets_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop("client_mutation_id", None)
+        data.pop("client_mutation_label", None)
+        service = GrievanceChannelService(user)
+        response = service.update(data)
+        if not response["success"]:
+            return response
+        return None
+
+    class Input(GrievanceChannelInputType):
+        id = graphene.String(required=True)
+
+
+class DeleteGrievanceChannelMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_class = "DeleteGrievanceChannelMutation"
+    _mutation_module = "grievance_social_protection"
+    _model = GrievanceChannel
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
+            raise ValidationError("mutation.authentication_required")
+
+    class Input(OpenIMISMutation.Input):
+        ids = graphene.List(graphene.UUID)
 
 
 # class CreateTicketAttachmentMutation(OpenIMISMutation):

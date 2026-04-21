@@ -10,7 +10,13 @@ from core.services.utils import (
     model_representation,
     output_result_success,
 )
-from grievance_social_protection.models import Ticket, Comment
+from grievance_social_protection.models import (
+    Ticket,
+    Comment,
+    GrievanceCategory,
+    GrievanceType,
+    GrievanceChannel,
+)
 from grievance_social_protection.validations import (
     TicketValidation,
     CommentValidation,
@@ -176,3 +182,24 @@ class CommentService:
                 model=obj_data["commenter_type"].lower()
             )
             obj_data["commenter_type"] = content_type
+
+
+class GrievanceCategoryService(BaseService):
+    OBJECT_TYPE = GrievanceCategory
+
+    def __init__(self, user):
+        super().__init__(user, None)
+
+
+class GrievanceTypeService(BaseService):
+    OBJECT_TYPE = GrievanceType
+
+    def __init__(self, user):
+        super().__init__(user, None)
+
+
+class GrievanceChannelService(BaseService):
+    OBJECT_TYPE = GrievanceChannel
+
+    def __init__(self, user):
+        super().__init__(user, None)

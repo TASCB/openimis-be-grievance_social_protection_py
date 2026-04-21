@@ -11,6 +11,7 @@ from .gql_mutations import *
 from graphql_relay import from_global_id
 from django.utils.translation import gettext_lazy as _
 from .gql_queries import GrievanceTypeGQL, GrievanceCategoryGQL, GrievanceChannelGQL
+from .models import TicketAttachment
 
 
 class Query(graphene.ObjectType):
@@ -26,7 +27,10 @@ class Query(graphene.ObjectType):
         TicketGQLType,
         str=graphene.String(),
     )
-    # ticket_attachments = DjangoFilterConnectionField(TicketAttachmentGQLType)
+    ticket_attachments = OrderedDjangoFilterConnectionField(
+        TicketAttachmentGQLType,
+        orderBy=graphene.List(of_type=graphene.String),
+    )
 
     ticket_details = OrderedDjangoFilterConnectionField(
         TicketGQLType,
@@ -169,6 +173,13 @@ class Query(graphene.ObjectType):
         if is_active is not None:
             qs = qs.filter(is_active=is_active)
         return qs
+
+    def resolve_ticket_attachments(self, info, **kwargs):
+        if not info.context.user.has_perms(TicketConfig.gql_query_tickets_perms):
+            raise PermissionDenied(_("unauthorized"))
+        from core.utils import filter_validity
+        qs = TicketAttachment.objects.filter(*filter_validity())
+        return gql_optimizer.query(qs, info)
 
     def resolve_grievance_channels(self, info, is_active=None, **kwargs):
         user = info.context.user

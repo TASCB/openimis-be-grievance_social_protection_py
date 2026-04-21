@@ -6,8 +6,8 @@ from django.core.exceptions import PermissionDenied
 from django.utils.translation import gettext as _
 from core.gql_queries import UserGQLType
 from .apps import TicketConfig
-from .models import Ticket, Comment
-from core import prefix_filterset, ExtendedConnection
+from .models import Ticket, Comment, TicketAttachment
+from core import prefix_filterset, ExtendedConnection, filter_validity
 from .util import model_obj_to_json
 from .validations import user_associated_with_ticket
 from .models import GrievanceType, GrievanceCategory, GrievanceChannel
@@ -249,23 +249,23 @@ class CommentGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
 
-# class TicketAttachmentGQLType(DjangoObjectType):
-#     class Meta:
-#         model = TicketAttachment
-#         interfaces = (graphene.relay.Node,)
-#         filter_fields = {
-#             "id": ["exact"],
-#             "filename": ["exact", "icontains"],
-#             "mime_type": ["exact", "icontains"],
-#             "url": ["exact", "icontains"],
-#             **prefix_filterset("ticket__", TicketGQLType._meta.filter_fields),
-#         }
-#         connection_class = ExtendedConnection
-#
-#     @classmethod
-#     def get_queryset(cls, queryset, info):
-#         queryset = queryset.filter(*filter_validity())
-#         return queryset
+class TicketAttachmentGQLType(DjangoObjectType):
+    class Meta:
+        model = TicketAttachment
+        interfaces = (graphene.relay.Node,)
+        filter_fields = {
+            "id": ["exact"],
+            "filename": ["exact", "icontains"],
+            "mime_type": ["exact", "icontains"],
+            "url": ["exact", "icontains"],
+            **prefix_filterset("ticket__", TicketGQLType._meta.filter_fields),
+        }
+        connection_class = ExtendedConnection
+
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        queryset = queryset.filter(*filter_validity())
+        return queryset
 
 
 class AttendingStaffRoleGQLType(ObjectType):

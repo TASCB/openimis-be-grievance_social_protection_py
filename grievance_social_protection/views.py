@@ -1,13 +1,14 @@
 import os
-import json
 import uuid
 import logging
 
 import core
-from django.core.exceptions import PermissionDenied
-from django.http import HttpResponse, JsonResponse, HttpResponseNotAllowed
+from django.http import HttpResponse
 from django.utils.translation import gettext as _
-from django.views.decorators.csrf import csrf_exempt
+from rest_framework import status as drf_status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from core.views import check_user_rights
 
 from .apps import TicketConfig
 from .models import Ticket, TicketAttachment, TicketMutation
@@ -37,27 +38,31 @@ MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 MAX_FILES_PER_TICKET = 5
 
 
+@api_view(["GET"])
+@permission_classes([check_user_rights(TicketConfig.gql_query_tickets_perms)])
 def attach(request):
     """Download a single ticket attachment by id."""
-    queryset = TicketAttachment.objects.filter(*core.filter_validity())
-    attachment = queryset.filter(id=request.GET.get("id")).first()
+    attachment = (
+        TicketAttachment.objects.filter(*core.filter_validity())
+        .filter(id=request.GET.get("id"))
+        .first()
+    )
     if not attachment:
-        raise PermissionDenied(_("unauthorized"))
-
-    if not request.user.is_authenticated:
-        raise PermissionDenied(_("unauthorized"))
+        return Response({"error": "not found"}, status=drf_status.HTTP_404_NOT_FOUND)
 
     root = TicketConfig.tickets_attachments_root_path
     if not root or not attachment.url:
-        return HttpResponse(status=404)
+        return Response({"error": "not found"}, status=drf_status.HTTP_404_NOT_FOUND)
 
     full_path = os.path.join(root, attachment.url)
     if not os.path.isfile(full_path):
-        return HttpResponse(status=404)
+        return Response({"error": "not found"}, status=drf_status.HTTP_404_NOT_FOUND)
 
     content_type = attachment.mime_type or "application/octet-stream"
     response = HttpResponse(content_type=content_type)
-    response["Content-Disposition"] = f'attachment; filename="{attachment.filename}"'
+    response["Content-Disposition"] = (
+        f'attachment; filename="{attachment.filename}"'
+    )
     with open(full_path, "rb") as f:
         response.write(f.read())
     return response
@@ -68,19 +73,13 @@ def _safe_filename(original):
     return base or "file"
 
 
-@csrf_exempt
+@api_view(["POST"])
+@permission_classes([check_user_rights(TicketConfig.gql_mutation_create_tickets_perms)])
 def upload(request):
-    """Multipart upload endpoint. Accepts field ticket_uuid and one or many 'files'."""
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
+    """Multipart upload endpoint. Accepts ticket_uuid or client_mutation_id and 'files'."""
+    ticket_uuid = request.data.get("ticket_uuid")
+    client_mutation_id = request.data.get("client_mutation_id")
 
-    if not request.user.is_authenticated:
-        raise PermissionDenied(_("unauthorized"))
-    if not request.user.has_perms(TicketConfig.gql_mutation_create_tickets_perms):
-        raise PermissionDenied(_("unauthorized"))
-
-    ticket_uuid = request.POST.get("ticket_uuid")
-    client_mutation_id = request.POST.get("client_mutation_id")
     ticket = None
     if ticket_uuid:
         ticket = Ticket.objects.filter(id=ticket_uuid, is_deleted=False).first()
@@ -92,35 +91,41 @@ def upload(request):
         )
         ticket = tm.ticket if tm and not tm.ticket.is_deleted else None
     else:
-        return JsonResponse(
-            {"error": "ticket_uuid or client_mutation_id is required"}, status=400
+        return Response(
+            {"error": "ticket_uuid or client_mutation_id is required"},
+            status=drf_status.HTTP_400_BAD_REQUEST,
         )
     if not ticket:
-        return JsonResponse({"error": "ticket not found"}, status=404)
+        return Response(
+            {"error": "ticket not found"}, status=drf_status.HTTP_404_NOT_FOUND
+        )
 
     root = TicketConfig.tickets_attachments_root_path
     if not root:
-        return JsonResponse(
-            {"error": "tickets_attachments_root_path is not configured"}, status=500
+        return Response(
+            {"error": "tickets_attachments_root_path is not configured"},
+            status=drf_status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     os.makedirs(root, exist_ok=True)
 
     files = request.FILES.getlist("files")
     if not files:
-        return JsonResponse({"error": "no files provided"}, status=400)
+        return Response(
+            {"error": "no files provided"}, status=drf_status.HTTP_400_BAD_REQUEST
+        )
 
     existing_count = TicketAttachment.objects.filter(
         ticket=ticket, *core.filter_validity()
     ).count()
     if existing_count + len(files) > MAX_FILES_PER_TICKET:
-        return JsonResponse(
+        return Response(
             {
                 "error": (
                     f"attachment limit exceeded: ticket has {existing_count}, "
                     f"uploading {len(files)}, max {MAX_FILES_PER_TICKET}"
                 )
             },
-            status=400,
+            status=drf_status.HTTP_400_BAD_REQUEST,
         )
 
     saved = []
@@ -160,5 +165,7 @@ def upload(request):
             }
         )
 
-    status = 200 if saved else 400
-    return JsonResponse({"saved": saved, "errors": errors}, status=status)
+    http_status = (
+        drf_status.HTTP_200_OK if saved else drf_status.HTTP_400_BAD_REQUEST
+    )
+    return Response({"saved": saved, "errors": errors}, status=http_status)

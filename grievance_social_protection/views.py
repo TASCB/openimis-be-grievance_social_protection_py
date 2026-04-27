@@ -3,6 +3,7 @@ import uuid
 import logging
 
 import core
+from django.conf import settings
 from django.http import HttpResponse
 from django.utils.translation import gettext as _
 from rest_framework import status as drf_status
@@ -38,6 +39,18 @@ MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 MAX_FILES_PER_TICKET = 5
 
 
+def _attachments_root():
+    root = TicketConfig.tickets_attachments_root_path
+    if root:
+        return root
+
+    media_root = getattr(settings, "MEDIA_ROOT", None)
+    if media_root:
+        return os.path.join(media_root, "grievance_attachments")
+
+    return None
+
+
 @api_view(["GET"])
 @permission_classes([check_user_rights(TicketConfig.gql_query_tickets_perms)])
 def attach(request):
@@ -50,7 +63,7 @@ def attach(request):
     if not attachment:
         return Response({"error": "not found"}, status=drf_status.HTTP_404_NOT_FOUND)
 
-    root = TicketConfig.tickets_attachments_root_path
+    root = _attachments_root()
     if not root or not attachment.url:
         return Response({"error": "not found"}, status=drf_status.HTTP_404_NOT_FOUND)
 
@@ -100,10 +113,10 @@ def upload(request):
             {"error": "ticket not found"}, status=drf_status.HTTP_404_NOT_FOUND
         )
 
-    root = TicketConfig.tickets_attachments_root_path
+    root = _attachments_root()
     if not root:
         return Response(
-            {"error": "tickets_attachments_root_path is not configured"},
+            {"error": "attachment storage is not configured"},
             status=drf_status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     os.makedirs(root, exist_ok=True)

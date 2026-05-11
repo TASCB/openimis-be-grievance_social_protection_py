@@ -3,11 +3,13 @@ from django.core.exceptions import ValidationError
 from django.db.models import Max
 from django.db import transaction
 
+from core.models import User
 from core.services import BaseService
 from core.signals import register_service_signal
 from core.services.utils import check_authentication as check_authentication, output_exception, \
     model_representation, output_result_success
 from grievance_social_protection.models import Ticket, Comment
+from grievance_social_protection.notifications import notify_assignment
 from grievance_social_protection.validations import (
     TicketValidation,
     CommentValidation,
@@ -28,7 +30,11 @@ class TicketService(BaseService):
         resolution_error = validate_resolution(obj_data)
         if resolution_error:
             raise ValidationError(resolution_error)
-        return super().create(obj_data)
+        new_assignee_id = obj_data.get('attending_staff_id') or obj_data.get('attending_staff')
+        response = super().create(obj_data)
+        if response.get('success') and new_assignee_id:
+            self._notify_if_assigned(response['data'].get('id'), new_assignee_id)
+        return response
 
     @register_service_signal('ticket_service.update')
     def update(self, obj_data):
@@ -36,7 +42,21 @@ class TicketService(BaseService):
         resolution_error = validate_resolution(obj_data)
         if resolution_error:
             raise ValidationError(resolution_error)
-        return super().update(obj_data)
+        previous_assignee_id = Ticket.objects.filter(id=obj_data.get('id')) \
+            .values_list('attending_staff_id', flat=True).first()
+        response = super().update(obj_data)
+        if response.get('success'):
+            new_assignee_id = obj_data.get('attending_staff_id') or obj_data.get('attending_staff')
+            if new_assignee_id and str(new_assignee_id) != str(previous_assignee_id):
+                self._notify_if_assigned(obj_data.get('id'), new_assignee_id)
+        return response
+
+    @staticmethod
+    def _notify_if_assigned(ticket_id, assignee_id):
+        ticket = Ticket.objects.filter(id=ticket_id).first()
+        assignee = User.objects.filter(id=assignee_id).first()
+        if ticket and assignee:
+            notify_assignment(ticket, assignee)
 
     @register_service_signal('ticket_service.delete')
     def delete(self, obj_data):

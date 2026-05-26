@@ -10,46 +10,51 @@ from grievance_social_protection.models import (
 items = [
     {
         "category": "Malipo kwa walengwa wa mpango",
+        "timeline": 60,
         "types": [
             "Kukosa Malipo ya Ruzuku ya msingi (PCT)",
-            "Kukosa Malipo ya ajira za muda (PWP)",
-            "Kukosa Malipo ya Ruzuku ya Uzalishaji mali  (LE PG )",
-            "Malipo Pungufu ya Ruzuku ya msingi  ( PCT)",
-            "Malipo pungufu ya ajira za muda (PWP)",
-            "Malipo Pungufu ya Ruzuku ya uzalishaji mali ( LE PG)",
-            "Kuchelewa Malipo ya ruzuku ya msingi (PCT) (PCT, PWP, EI)",
-            "Kuchelewa Malipo ya ajira za muda (PWP)",
-            "Kuchelewa Malipo ya ruzuku ya uzalishaji mali  (LE PG)",
-            "Changamoto ya kupata malipo",
+            "Kukosa Malipo ya ajira za muda (CS-PW)",
+            "Kukosa Malipo ya Ruzuku ya Uzalishaji mali (EEI)",
+            "Malipo Pungufu ya Ruzuku ya msingi (PCT)",
+            "Malipo pungufu ya ajira za muda (CS-PW)",
+            "Malipo Pungufu ya Ruzuku ya uzalishaji mali (EEI)",
+            "Kuchelewa Malipo ya ruzuku ya msingi (PCT)",
+            "Kuchelewa Malipo ya ajira za muda (CS-PW)",
+            "Kuchelewa Malipo ya ruzuku ya uzalishaji mali (EEI)",
+            "Changamoto ya kupokea malipo",
+            "Kaya kusimamishiwa malipo (suspended from payment)",
         ],
     },
     {
         "category": "Malipo kwa wasio walengwa wa mpango",
+        "timeline": 45,
         "types": [
-            "Malipo Pungufu kwa watoa huduma",
-            "Kuchelewa kwa Malipo ya watoa huduma",
+            "Kukosa malipo/kutolipwa",
+            "Kupokea malipo pungufu",
+            "Kuchelewa kwa Malipo",
         ],
     },
     {
         "category": "Utambuzi na Uhakiki wa kaya",
+        "timeline": 21,
         "types": [
             "Kaya kutotambuliwa kabisa",
-            "Jina la kaya kuondolewa kwenye orodha ya awali (TF3) yaliyopendekezwa",
+            "Jina la kaya kutoingizwa kwenye orodha ya awali (TF3) yaliyopendekezwa",
             "Jina la kaya kuondolewa kwenye orodha ya mwisho (TF4) iliyopitishwa",
             "Kaya kutoingiziwa taarifa kwenye kishkwambi/kutododoswa kwa sababu yoyote ile",
             "Kuingizwa kwenye mpango kwa kaya isiyo na vigezo",
             "Kaya kutokuhakikiwa / kufanyiwa tathmini",
             "Kaya imehakikiwa haipo kwenye orodha ya malipo",
-            "Kaya kusimamishiwa malipo (suspended from payment)",
         ],
     },
     {
-        "category": "Kuhuisha taarifa za  walengwa",
+        "category": "Kuhuisha taarifa za walengwa",
+        "timeline": 21,
         "types": [
-            "Mtoto aliyezaliwa  kukosekana kwenye orodha ya kaya",
+            "Mtoto aliyezaliwa kukosekana kwenye orodha ya kaya",
             "Wanafunzi kutokuwepo kwenye orodha ya kaya",
-            "Mtoto kutokubadilishiwa kituo kituo cha huduma",
-            "Kutofanya mabadiliko ya hadhi ya wana kaya ( kuhama kaya au kifo)",
+            "Mtoto kutokubadilishiwa kituo cha huduma",
+            "Kutofanya mabadiliko ya hadhi ya wana kaya (mfano: kuhama kaya au kifo)",
             "Kutoingiza wanakaya wapya waliohamia",
             "Kutobadilisha mwakilishi wa kaya",
             "Kutorekebisha taarifa za wanakaya",
@@ -57,17 +62,18 @@ items = [
     },
     {
         "category": "Huduma zisizoridhisha",
+        "timeline": 45,
         "types": [
             "Malalamiko yasiyotatuliwa kwa wakati",
             "Kukosa ushauri wa kitaalamu kuhusu kilimo, ufugaji na ujasiriamali",
             "Utovu wa nidhamu wa watumishi",
-            "Kuchelewa kulipwa malipo/madai",
             "Watumishi kutumia lugha chafu",
-            "Kunyimwa haki au  huduma kutokana na ubaguzi",
+            "Kunyimwa haki au huduma kutokana na ubaguzi",
         ],
     },
     {
-        "category": "Unyanyasaji wa kijinisia usiohusu Unyanyasaji/uonevu/udhalilishaji wa kingono",
+        "category": "Unyanyasaji wa kijinsia usiohusu Unyanyasaji/uonevu/udhalilishaji wa kingono",
+        "timeline": 60,
         "types": [
             "Matukio ya kushambuliwa kimwili",
             "Matusi au unyanyasaji wa maneno",
@@ -77,7 +83,8 @@ items = [
         ],
     },
     {
-        "category": "Unyanyasaji wa kijinisia unaohusu Unyanyasaji/uonevu/udhalilishaji wa kingono",
+        "category": "Unyanyasaji wa kijinsia unaohusu Unyanyasaji/uonevu/udhalilishaji wa kingono",
+        "timeline": 0,
         "types": [
             "Unyanyasaji wa kingono",
             "Uonevu au udhalilishaji wa kingono",
@@ -85,14 +92,17 @@ items = [
     },
     {
         "category": "Mazingira",
+        "timeline": 21,
         "types": [
             "Udhibiti duni wa uchafuzi wa vumbi",
             "Usimamizi duni wa taka",
             "Ukosefu wa vifaakinga vya kutosha (PPE)",
+            "Kuumia wakati wa kazi na kutopata huduma stahiki za kitabibu",
         ],
     },
     {
         "category": "Maswala ya Ardhi",
+        "timeline": 60,
         "types": [
             "Migogoro ya umiliki wa ardhi iliyotwaliwa",
             "Migogoro kuhusu ukubwa wa ardhi",
@@ -100,7 +110,8 @@ items = [
         ],
     },
     {
-        "category": "Maswali na maoni",
+        "category": "Maswali, mahitaji na maoni",
+        "timeline": 14,
         "types": [
             "Maswali, mapendekezo, au mashaka kuhusu programu",
             "Kukosa kitambulisho au namba za NIDA",
@@ -109,6 +120,7 @@ items = [
             "Kusahau neno la siri la akaunti",
             "Kutopata kadi ya bima ya afya baada ya kukamilisha malipo",
             "Utapeli",
+            "Kupoteza simu kadi au kadi ya benki",
         ],
     },
 ]
@@ -139,6 +151,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Seeding with user: {username}")
 
         categories_created = 0
+        categories_updated = 0
         categories_skipped = 0
         types_created = 0
         types_skipped = 0
@@ -146,21 +159,36 @@ class Command(BaseCommand):
         channels_skipped = 0
 
         for item in items:
+            timeline = item.get("timeline")
             cat_qs = GrievanceCategory.objects.filter(name=item["category"])
             if cat_qs.exists():
                 g_category = cat_qs.first()
-                categories_skipped += 1
-                self.stdout.write(
-                    f"  [SKIP] Category already exists: {item['category']}"
-                )
+                if g_category.timeline_days != timeline:
+                    g_category.timeline_days = timeline
+                    g_category.save(username=username)
+                    categories_updated += 1
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  [UPD] Category timeline updated to {timeline} days: {item['category']}"
+                        )
+                    )
+                else:
+                    categories_skipped += 1
+                    self.stdout.write(
+                        f"  [SKIP] Category already exists: {item['category']}"
+                    )
             else:
                 g_category = GrievanceCategory(
-                    name=item["category"], user_created=user
+                    name=item["category"],
+                    timeline_days=timeline,
+                    user_created=user,
                 )
                 g_category.save(username=username)
                 categories_created += 1
                 self.stdout.write(
-                    self.style.SUCCESS(f"  [OK] Created category: {item['category']}")
+                    self.style.SUCCESS(
+                        f"  [OK] Created category ({timeline} days): {item['category']}"
+                    )
                 )
 
             for type_name in item["types"]:
@@ -199,7 +227,8 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"\nDone! Categories: {categories_created} created, {categories_skipped} skipped. "
+                f"\nDone! Categories: {categories_created} created, {categories_updated} updated, "
+                f"{categories_skipped} skipped. "
                 f"Types: {types_created} created, {types_skipped} skipped. "
                 f"Channels: {channels_created} created, {channels_skipped} skipped."
             )

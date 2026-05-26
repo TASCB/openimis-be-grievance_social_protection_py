@@ -192,6 +192,7 @@ class GrievanceCategory(core_models.UUIDModel, HistoryBusinessModel):
     code = models.CharField(max_length=50, null=True, blank=True)
     name = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
+    timeline_days = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         db_table = "grievance_GrievanceCategory"

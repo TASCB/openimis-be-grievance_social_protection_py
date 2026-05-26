@@ -1,9 +1,29 @@
+import uuid as _uuid
+from graphql_relay import from_global_id
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import Max
 from django.db import transaction
 from core import TimeUtils
 from core.services import BaseService
+
+
+def _normalize_uuid(value):
+    """Accept either a raw UUID string or a Relay global ID and return the UUID string."""
+    if not value:
+        return value
+    try:
+        _uuid.UUID(str(value))
+        return value
+    except (ValueError, AttributeError):
+        pass
+    try:
+        _, decoded = from_global_id(value)
+        _uuid.UUID(str(decoded))
+        return decoded
+    except Exception:
+        return value
+
 from core.signals import register_service_signal
 from core.services.utils import (
     check_authentication as check_authentication,
@@ -302,6 +322,8 @@ class GrievanceTypeService(BaseService):
         super().__init__(user)
 
     def _adjust_create_payload(self, payload_data):
+        if "category_id" in payload_data:
+            payload_data["category_id"] = _normalize_uuid(payload_data["category_id"])
         payload_data["user_created"] = self.user
         payload_data["user_updated"] = self.user
         payload_data["date_created"] = TimeUtils.now()
@@ -309,6 +331,8 @@ class GrievanceTypeService(BaseService):
         return payload_data
 
     def _adjust_update_payload(self, payload_data):
+        if "category_id" in payload_data:
+            payload_data["category_id"] = _normalize_uuid(payload_data["category_id"])
         payload_data["user_updated"] = self.user
         payload_data["date_updated"] = TimeUtils.now()
         return super()._adjust_update_payload(payload_data)

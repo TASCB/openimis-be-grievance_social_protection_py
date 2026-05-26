@@ -2,18 +2,26 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import Max
 from django.db import transaction
-
-from core.models import User
+from core import TimeUtils
 from core.services import BaseService
 from core.signals import register_service_signal
-from core.services.utils import check_authentication as check_authentication, output_exception, \
-    model_representation, output_result_success
-from grievance_social_protection.models import Ticket, Comment
-from grievance_social_protection.notifications import notify_assignment
+from core.services.utils import (
+    check_authentication as check_authentication,
+    output_exception,
+    model_representation,
+    output_result_success,
+)
+from grievance_social_protection.models import (
+    Ticket,
+    Comment,
+    GrievanceCategory,
+    GrievanceType,
+    GrievanceChannel,
+)
 from grievance_social_protection.validations import (
     TicketValidation,
     CommentValidation,
-    validate_resolution
+    validate_resolution,
 )
 
 
@@ -23,87 +31,160 @@ class TicketService(BaseService):
     def __init__(self, user, validation_class=TicketValidation):
         super().__init__(user, validation_class)
 
-    @register_service_signal('ticket_service.create')
+    @register_service_signal("ticket_service.create")
     def create(self, obj_data):
         self._get_content_type(obj_data)
         self._generate_code(obj_data)
         resolution_error = validate_resolution(obj_data)
         if resolution_error:
             raise ValidationError(resolution_error)
-        new_assignee_id = obj_data.get('attending_staff_id') or obj_data.get('attending_staff')
-        response = super().create(obj_data)
-        if response.get('success') and new_assignee_id:
-            self._notify_if_assigned(response['data'].get('id'), new_assignee_id)
-        return response
+        return super().create(obj_data)
 
-    @register_service_signal('ticket_service.update')
+    @register_service_signal("ticket_service.update")
     def update(self, obj_data):
         self._get_content_type(obj_data)
         resolution_error = validate_resolution(obj_data)
         if resolution_error:
             raise ValidationError(resolution_error)
-        previous_assignee_id = Ticket.objects.filter(id=obj_data.get('id')) \
-            .values_list('attending_staff_id', flat=True).first()
-        response = super().update(obj_data)
-        if response.get('success'):
-            new_assignee_id = obj_data.get('attending_staff_id') or obj_data.get('attending_staff')
-            if new_assignee_id and str(new_assignee_id) != str(previous_assignee_id):
-                self._notify_if_assigned(obj_data.get('id'), new_assignee_id)
-        return response
+        return super().update(obj_data)
 
-    @staticmethod
-    def _notify_if_assigned(ticket_id, assignee_id):
-        ticket = Ticket.objects.filter(id=ticket_id).first()
-        assignee = User.objects.filter(id=assignee_id).first()
-        if ticket and assignee:
-            notify_assignment(ticket, assignee)
-
-    @register_service_signal('ticket_service.delete')
+    @register_service_signal("ticket_service.delete")
     def delete(self, obj_data):
         return super().delete(obj_data)
 
-    @register_service_signal('ticket_service.reopen_ticket')
+    @register_service_signal("ticket_service.close_ticket")
+    @check_authentication
+    def close_ticket(self, obj_data):
+        try:
+            with transaction.atomic():
+                ticket_id = obj_data.get("id")
+                ticket = Ticket.objects.filter(id=ticket_id).first()
+                if not ticket:
+                    raise ValidationError("Ticket not found")
+
+                ticket_update_data = {
+                    key: value
+                    for key, value in obj_data.items()
+                    if key
+                    in {
+                        "title",
+                        "description",
+                        "attending_staff_id",
+                        "date_of_incident",
+                        "priority",
+                        "due_date",
+                        "category",
+                        "flags",
+                        "channel",
+                        "resolution",
+                    }
+                }
+
+                resolution_error = validate_resolution(ticket_update_data)
+                if resolution_error:
+                    raise ValidationError(resolution_error)
+                if ticket_update_data:
+                    self.validation_class.validate_update(
+                        self.user, id=ticket_id, **ticket_update_data
+                    )
+                    ticket.update(data=ticket_update_data, user=self.user, save=False)
+
+                comment_text = (obj_data.get("comment") or "").strip()
+                if not comment_text:
+                    raise ValidationError("Closing comment is required")
+
+                comment_payload = {"ticket_id": ticket_id, "comment": comment_text}
+                if obj_data.get("commenter_type"):
+                    comment_payload["commenter_type"] = obj_data.get("commenter_type")
+                if obj_data.get("commenter_id"):
+                    comment_payload["commenter_id"] = obj_data.get("commenter_id")
+                if comment_payload.get("commenter_type") == "user":
+                    comment_payload["commenter_id"] = str(self.user.id)
+
+                comment_service = CommentService(self.user)
+                comment_service._get_content_type(comment_payload)
+                comment_service.validation_class.validate_create(
+                    self.user, **comment_payload
+                )
+
+                comment = Comment(
+                    ticket=ticket,
+                    comment=comment_text,
+                    commenter_type=comment_payload.get("commenter_type"),
+                    commenter_id=comment_payload.get("commenter_id"),
+                    is_resolution=True,
+                )
+                comment.save(username=self.user.username)
+
+                comment_service._append_comment_id(ticket, comment.id)
+                ticket.status = Ticket.TicketStatus.CLOSED
+                ticket.save(username=self.user.username)
+                return {
+                    "success": True,
+                    "message": "Ok",
+                    "detail": "close_ticket",
+                }
+        except Exception as exc:
+            return output_exception(
+                model_name=self.OBJECT_TYPE.__name__,
+                method="close_ticket",
+                exception=exc,
+            )
+
+    @register_service_signal("ticket_service.reopen_ticket")
     @check_authentication
     def reopen_ticket(self, obj_data):
         try:
             with transaction.atomic():
                 self.validation_class.validate_update(self.user, **obj_data)
-                ticket_id = obj_data.get('id')
+                ticket_id = obj_data.get("id")
                 ticket = Ticket.objects.filter(id=ticket_id).first()
                 ticket.status = Ticket.TicketStatus.OPEN
                 self._check_if_comment_resolution(ticket_id)
-                ticket.save(user=self.user)
+                ticket.save(username=self.user.username)
                 return {
                     "success": True,
                     "message": "Ok",
                     "detail": "reopen_ticket",
                 }
         except Exception as exc:
-            return output_exception(model_name=self.OBJECT_TYPE.__name__, method="reopen_ticket", exception=exc)
+            return output_exception(
+                model_name=self.OBJECT_TYPE.__name__,
+                method="reopen_ticket",
+                exception=exc,
+            )
 
     @transaction.atomic
     def _check_if_comment_resolution(self, ticket_id):
-        comment_queryset = Comment.objects.filter(ticket_id=ticket_id, is_resolution=True)
+        comment_queryset = Comment.objects.filter(
+            ticket_id=ticket_id, is_resolution=True
+        )
         if comment_queryset.exists():
             comment = comment_queryset.first()
             comment.is_resolution = False
-            comment.save(user=self.user)
+            comment.save(username=self.user.username)
 
     def _get_content_type(self, obj_data):
-        if 'reporter_type' in obj_data:
-            content_type = ContentType.objects.get(model=obj_data['reporter_type'].lower())
-            obj_data['reporter_type'] = content_type
+        if "reporter_type" in obj_data:
+            content_type = ContentType.objects.get(
+                model=obj_data["reporter_type"].lower()
+            )
+            obj_data["reporter_type"] = content_type
 
     def _generate_code(self, obj_data):
-        if not obj_data.get('code'):
-            last_ticket_code = Ticket.objects.filter(code__startswith='GRS').aggregate(Max('code')).get('code__max')
+        if not obj_data.get("code"):
+            last_ticket_code = (
+                Ticket.objects.filter(code__startswith="GRS")
+                .aggregate(Max("code"))
+                .get("code__max")
+            )
             if last_ticket_code is None:
                 last_ticket_code_numeric = 0
             else:
                 last_ticket_code_numeric = int(last_ticket_code[3:])
 
-            new_ticket_code = f'GRS{last_ticket_code_numeric + 1:08}'
-            obj_data['code'] = new_ticket_code
+            new_ticket_code = f"GRS{last_ticket_code_numeric + 1:08}"
+            obj_data["code"] = new_ticket_code
 
 
 class CommentService:
@@ -113,65 +194,150 @@ class CommentService:
         self.user = user
         self.validation_class = validation_class
 
-    @register_service_signal('comment_service.create')
+    @register_service_signal("comment_service.create")
     @check_authentication
     def create(self, obj_data):
         try:
             with transaction.atomic():
                 self._get_content_type(obj_data)
-                ticket_id = obj_data.get('ticket_id')
+                ticket_id = obj_data.get("ticket_id")
                 self.validation_class.validate_create(self.user, **obj_data)
 
                 comment_obj = self.OBJECT_TYPE(**obj_data)
                 response_data = self.save_instance(comment_obj)
-                self._update_ticket_comment_ids(ticket_id, response_data['data']['id'])
+                self._update_ticket_comment_ids(ticket_id, response_data["data"]["id"])
 
                 return response_data
 
         except Exception as exc:
             return output_exception(
-                model_name=self.OBJECT_TYPE.__name__,
-                method="create",
-                exception=exc
+                model_name=self.OBJECT_TYPE.__name__, method="create", exception=exc
             )
 
     @transaction.atomic
     def _update_ticket_comment_ids(self, ticket_id, comment_id):
         ticket = Ticket.objects.filter(id=ticket_id).first()
         if ticket:
-            json_ext = ticket.json_ext or {}
-            comment_ids = json_ext.get('comment_ids', [])
-            comment_ids.append(comment_id)
-            json_ext['comment_ids'] = comment_ids
-            ticket.json_ext = json_ext
-            ticket.save(user=self.user)
+            self._append_comment_id(ticket, comment_id)
+            ticket.save(username=self.user.username)
 
-    @register_service_signal('comment_service.resolve_grievance_by_comment')
+    def _append_comment_id(self, ticket, comment_id):
+        json_ext = ticket.json_ext or {}
+        comment_ids = list(json_ext.get("comment_ids", []))
+        comment_id = str(comment_id)
+        if comment_id not in comment_ids:
+            comment_ids.append(comment_id)
+        json_ext["comment_ids"] = comment_ids
+        ticket.json_ext = json_ext
+
+    @register_service_signal("comment_service.resolve_grievance_by_comment")
     @check_authentication
     def resolve_grievance_by_comment(self, obj_data):
         try:
             with transaction.atomic():
-                self.validation_class.validate_resolve_grievance_by_comment(self.user, **obj_data)
-                comment = Comment.objects.filter(id=obj_data.get('id')).first()
+                self.validation_class.validate_resolve_grievance_by_comment(
+                    self.user, **obj_data
+                )
+                comment = Comment.objects.filter(id=obj_data.get("id")).first()
                 ticket = comment.ticket
                 ticket.status = Ticket.TicketStatus.CLOSED
-                comment.is_resolution = True
-                ticket.save(user=self.user)
-                comment.save(user=self.user)
+                self._append_comment_id(ticket, comment.id)
+                if not comment.is_resolution:
+                    comment.is_resolution = True
+                    comment.save(username=self.user.username)
+                ticket.save(username=self.user.username)
                 return {
                     "success": True,
                     "message": "Ok",
                     "detail": "resolve_grievance_by_comment",
                 }
         except Exception as exc:
-            return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve_grievance_by_comment", exception=exc)
+            return output_exception(
+                model_name=self.OBJECT_TYPE.__name__,
+                method="resolve_grievance_by_comment",
+                exception=exc,
+            )
 
     def save_instance(self, obj_):
-        obj_.save(user=self.user)
+        obj_.save(username=self.user.username)
         dict_repr = model_representation(obj_)
         return output_result_success(dict_representation=dict_repr)
 
     def _get_content_type(self, obj_data):
-        if 'commenter_type' in obj_data:
-            content_type = ContentType.objects.get(model=obj_data['commenter_type'].lower())
-            obj_data['commenter_type'] = content_type
+        if "commenter_type" in obj_data:
+            content_type = ContentType.objects.get(
+                model=obj_data["commenter_type"].lower()
+            )
+            obj_data["commenter_type"] = content_type
+
+
+class GrievanceCategoryService(BaseService):
+    OBJECT_TYPE = GrievanceCategory
+
+    def __init__(self, user):
+        super().__init__(user)
+
+    def _adjust_create_payload(self, payload_data):
+        payload_data["user_created"] = self.user
+        payload_data["user_updated"] = self.user
+        payload_data["date_created"] = TimeUtils.now()
+        payload_data["date_updated"] = TimeUtils.now()
+        return payload_data
+
+    def _adjust_update_payload(self, payload_data):
+        payload_data["user_updated"] = self.user
+        payload_data["date_updated"] = TimeUtils.now()
+        return super()._adjust_update_payload(payload_data)
+
+    def save_instance(self, obj_):
+        obj_.save(username=self.user.username)
+        dict_repr = model_representation(obj_)
+        return output_result_success(dict_representation=dict_repr)
+
+
+class GrievanceTypeService(BaseService):
+    OBJECT_TYPE = GrievanceType
+
+    def __init__(self, user):
+        super().__init__(user)
+
+    def _adjust_create_payload(self, payload_data):
+        payload_data["user_created"] = self.user
+        payload_data["user_updated"] = self.user
+        payload_data["date_created"] = TimeUtils.now()
+        payload_data["date_updated"] = TimeUtils.now()
+        return payload_data
+
+    def _adjust_update_payload(self, payload_data):
+        payload_data["user_updated"] = self.user
+        payload_data["date_updated"] = TimeUtils.now()
+        return super()._adjust_update_payload(payload_data)
+
+    def save_instance(self, obj_):
+        obj_.save(username=self.user.username)
+        dict_repr = model_representation(obj_)
+        return output_result_success(dict_representation=dict_repr)
+
+
+class GrievanceChannelService(BaseService):
+    OBJECT_TYPE = GrievanceChannel
+
+    def __init__(self, user):
+        super().__init__(user)
+
+    def _adjust_create_payload(self, payload_data):
+        payload_data["user_created"] = self.user
+        payload_data["user_updated"] = self.user
+        payload_data["date_created"] = TimeUtils.now()
+        payload_data["date_updated"] = TimeUtils.now()
+        return payload_data
+
+    def _adjust_update_payload(self, payload_data):
+        payload_data["user_updated"] = self.user
+        payload_data["date_updated"] = TimeUtils.now()
+        return super()._adjust_update_payload(payload_data)
+
+    def save_instance(self, obj_):
+        obj_.save(username=self.user.username)
+        dict_repr = model_representation(obj_)
+        return output_result_success(dict_representation=dict_repr)

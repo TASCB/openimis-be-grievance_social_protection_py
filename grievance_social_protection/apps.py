@@ -6,9 +6,9 @@ logger = logging.getLogger(__name__)
 
 MODULE_NAME = "grievance_social_protection"
 
-DEFAULT_STRING = 'Default'
+DEFAULT_STRING = "Default"
 # CRON timedelta: {days},{hours}
-DEFAULT_TIME_RESOLUTION = '5,0'
+DEFAULT_TIME_RESOLUTION = "5,0"
 
 DEFAULT_CFG = {
     "default_validations_disabled": False,
@@ -20,23 +20,25 @@ DEFAULT_CFG = {
     "gql_mutation_create_comment_perms": ["127005"],
     "gql_mutation_resolve_grievance_perms": ["127006"],
     "tickets_attachments_root_path": None,
-
-    "grievance_types": [DEFAULT_STRING, 'Category A', 'Category B'],
-    "grievance_flags": [DEFAULT_STRING, 'Flag A', 'Flag B'],
-    "grievance_channels": [DEFAULT_STRING, 'Channel A', 'Channel B'],
+    "grievance_types": [DEFAULT_STRING, "Category A", "Category B"],
+    "grievance_flags": [DEFAULT_STRING, "Flag A", "Flag B"],
+    "grievance_channels": [DEFAULT_STRING, "Channel A", "Channel B"],
     "default_responses": {DEFAULT_STRING: DEFAULT_STRING},
     "grievance_anonymized_fields": {DEFAULT_STRING: []},
     # CRON timedelta: {days},{hours}
     "resolution_times": DEFAULT_TIME_RESOLUTION,
-    "default_resolution": {DEFAULT_STRING: DEFAULT_TIME_RESOLUTION, 'Category A': '4,0', 'Category B': '6,12'},
-
+    "default_resolution": {
+        DEFAULT_STRING: DEFAULT_TIME_RESOLUTION,
+        "Category A": "4,0",
+        "Category B": "6,12",
+    },
     "attending_staff_role_ids": [],
     "default_attending_staff_role_ids": {DEFAULT_STRING: [1, 2]},
 }
 
 
 class TicketConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
+    default_auto_field = "django.db.models.BigAutoField"
     name = MODULE_NAME
     gql_query_tickets_perms = []
     gql_query_comments_perms = []
@@ -59,10 +61,11 @@ class TicketConfig(AppConfig):
 
     def ready(self):
         from core.models import ModuleConfiguration
+
         cfg = ModuleConfiguration.get_or_default(MODULE_NAME, DEFAULT_CFG)
-        self.__validate_grievance_dict_fields(cfg, 'default_responses')
-        self.__validate_grievance_dict_fields(cfg, 'grievance_anonymized_fields')
-        self.__validate_grievance_dict_fields(cfg, 'default_resolution')
+        self.__validate_grievance_dict_fields(cfg, "default_responses")
+        self.__validate_grievance_dict_fields(cfg, "grievance_anonymized_fields")
+        self.__validate_grievance_dict_fields(cfg, "default_resolution")
         self.__validate_grievance_default_resolution_time(cfg)
         self.__load_config(cfg)
 
@@ -70,15 +73,17 @@ class TicketConfig(AppConfig):
     def __validate_grievance_dict_fields(cls, cfg, field_name):
         def get_grievance_type_options_msg(types):
             types_string = ", ".join(types)
-            return logger.info(f'Available grievance types: {types_string}')
+            return logger.info(f"Available grievance types: {types_string}")
 
         dict_field = cfg.get(field_name, {})
         if not dict_field:
             return
 
-        grievance_types = cfg.get('grievance_types', [])
+        grievance_types = cfg.get("grievance_types", [])
         if not grievance_types:
-            logger.warning('Please specify grievance_types if you want to setup %s.', field_name)
+            logger.warning(
+                "Please specify grievance_types if you want to setup %s.", field_name
+            )
 
         if not isinstance(dict_field, dict):
             get_grievance_type_options_msg(grievance_types)
@@ -86,7 +91,7 @@ class TicketConfig(AppConfig):
 
         for field_key in dict_field.keys():
             if field_key not in grievance_types:
-                logger.warning('%s in %s not in grievance_types', field_key, field_name)
+                logger.warning("%s in %s not in grievance_types", field_key, field_name)
                 get_grievance_type_options_msg(grievance_types)
 
     @classmethod
@@ -96,20 +101,22 @@ class TicketConfig(AppConfig):
             return
         for key in dict_field:
             value = dict_field[key]
-            if value in ['', None]:
+            if value in ["", None]:
                 resolution_times = cfg.get("resolution_times", DEFAULT_TIME_RESOLUTION)
                 logger.warning(
                     '"%s" has no value for resolution. The default one is taken as "%s".',
                     key,
-                    resolution_times
+                    resolution_times,
                 )
                 dict_field[key] = resolution_times
             else:
-                if ',' not in value:
-                    logger.warning("Invalid input. Configuration should contain two integers "
-                                   "representing days and hours, separated by a comma.")
+                if "," not in value:
+                    logger.warning(
+                        "Invalid input. Configuration should contain two integers "
+                        "representing days and hours, separated by a comma."
+                    )
                 else:
-                    parts = value.split(',')
+                    parts = value.split(",")
                     # Parse days and hours
                     days = int(parts[0])
                     hours = int(parts[1])
@@ -117,8 +124,10 @@ class TicketConfig(AppConfig):
                     if 0 <= days < 99 and 0 <= hours < 24:
                         logger.info(f"Days: {days}, Hours: {hours}")
                     else:
-                        logger.warning("Invalid input. Days must be between 0 and 99, "
-                                       "and hours must be between 0 and 24.")
+                        logger.warning(
+                            "Invalid input. Days must be between 0 and 99, "
+                            "and hours must be between 0 and 24."
+                        )
 
     @classmethod
     def __load_config(cls, cfg):

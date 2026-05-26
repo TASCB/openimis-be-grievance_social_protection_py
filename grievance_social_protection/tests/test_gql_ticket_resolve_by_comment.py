@@ -2,6 +2,7 @@ from django.test import TestCase
 from core.models import MutationLog
 from graphene import Schema
 from graphene.test import Client
+from core.test_helpers import create_test_interactive_user
 from grievance_social_protection.models import (
     Comment,
     Ticket
@@ -10,8 +11,7 @@ from grievance_social_protection.schema import Query, Mutation
 from grievance_social_protection.tests.gql_payloads import gql_mutation_resolve_ticket_by_comment
 from grievance_social_protection.tests.test_helpers import (
     create_ticket,
-    create_comment_for_existing_ticket,
-    create_test_grievance_user
+    create_comment_for_existing_ticket
 )
 from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase, BaseTestContext
 
@@ -28,7 +28,7 @@ class GQLTicketResolveByCommentTestCase(openIMISGraphQLTestCase):
     @classmethod
     def setUpClass(cls):
         super(GQLTicketResolveByCommentTestCase, cls).setUpClass()
-        cls.user = create_test_grievance_user(username='user_authorized')
+        cls.user = create_test_interactive_user(username='user_authorized', roles=[7])
         cls.existing_ticket = create_ticket(cls.user)
         cls.existing_comment = create_comment_for_existing_ticket(cls.user, cls.existing_ticket)
 
@@ -52,5 +52,6 @@ class GQLTicketResolveByCommentTestCase(openIMISGraphQLTestCase):
         comment = Comment.objects.get(id=self.existing_comment.id)
         ticket = Ticket.objects.get(id=self.existing_ticket.id)
         self.assertFalse(mutation_log.error)
-        self.assertEqual(comment.is_resolution, True)
-        self.assertEqual(ticket.status, self.status)
+        self.assertEquals(comment.is_resolution, True)
+        self.assertEquals(ticket.status, self.status)
+        self.assertIn(str(comment.id), ticket.json_ext["comment_ids"])

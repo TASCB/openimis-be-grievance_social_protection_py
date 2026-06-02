@@ -64,6 +64,16 @@ class Query(graphene.ObjectType):
         description="Query all grievance channels, optionally filter by active status",
     )
 
+    grievance_reports = graphene.List(
+        GrievanceReportRowGQLType,
+        report=graphene.String(required=True),
+        date_from=graphene.Date(),
+        date_to=graphene.Date(),
+        agent_id=graphene.String(),
+        paa_id=graphene.String(),
+        description="Aggregated grievance reports with optional date, agent, and PAA filters",
+    )
+
     def resolve_comments(self, info, **kwargs):
         user = info.context.user
 
@@ -189,6 +199,9 @@ class Query(graphene.ObjectType):
         if is_active is not None:
             qs = qs.filter(is_active=is_active)
         return qs
+
+    def resolve_grievance_reports(self, info, **kwargs):
+        return resolve_grievance_report_rows(info, **kwargs)
 
 
 class Mutation(graphene.ObjectType):

@@ -191,6 +191,7 @@ class Comment(HistoryModel):
 class GrievanceCategory(core_models.UUIDModel, HistoryBusinessModel):
     code = models.CharField(max_length=50, null=True, blank=True)
     name = models.CharField(max_length=255)
+    timeline = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
 
     class Meta:

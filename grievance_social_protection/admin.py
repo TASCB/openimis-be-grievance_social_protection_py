@@ -28,7 +28,7 @@ class HistoryBusinessModelAdmin(admin.ModelAdmin):
 
 @admin.register(GrievanceCategory)
 class GrievanceCategoryAdmin(HistoryBusinessModelAdmin):
-    list_display = ("name", "code", "is_active")
+    list_display = ("name", "code", "timeline", "is_active")
     search_fields = ("name",)
 
 

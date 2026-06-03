@@ -315,6 +315,7 @@ class GrievanceCategoryInputType(OpenIMISMutation.Input):
     id = graphene.String(required=False)
     code = graphene.String(required=False)
     name = graphene.String(required=True)
+    timeline = graphene.Int(required=False)
     is_active = graphene.Boolean(required=False, default_value=True)
 
 

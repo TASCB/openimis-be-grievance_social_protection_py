@@ -648,11 +648,12 @@ class GrievanceCategoryGQL(DjangoObjectType):
     class Meta:
         model = GrievanceCategory
         interfaces = (graphene.relay.Node,)
-        fields = ("id", "code", "name", "is_active")
+        fields = ("id", "code", "name", "timeline", "is_active")
         filter_fields = {
             "id": ["exact"],
             "code": ["exact", "icontains"],
             "name": ["exact", "icontains"],
+            "timeline": ["exact"],
             "is_active": ["exact"],
         }
         connection_class = ExtendedConnection

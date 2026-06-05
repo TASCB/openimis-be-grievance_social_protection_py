@@ -138,11 +138,24 @@ def _agent_name(ticket):
 
 
 def _resolution_status(status):
-    if status == Ticket.TicketStatus.RECEIVED:
-        return _("Received")
-    if status in CLOSED_STATUSES:
-        return _("Closed")
-    return _("Open")
+    status_labels = {
+        Ticket.TicketStatus.RECEIVED: _("Received"),
+        Ticket.TicketStatus.OPEN: _("Open"),
+        Ticket.TicketStatus.CLOSED: _("Closed"),
+        Ticket.TicketStatus.IN_PROGRESS: _("In Progress"),
+        Ticket.TicketStatus.RESOLVED: _("Resolved"),
+    }
+    return status_labels.get(status, status or _("Unspecified"))
+
+
+def _resolution_status_names():
+    return [
+        _clean_dimension_name(_("Received")),
+        _clean_dimension_name(_("Open")),
+        _clean_dimension_name(_("Closed")),
+        _clean_dimension_name(_("In Progress")),
+        _clean_dimension_name(_("Resolved")),
+    ]
 
 
 def _resolution_comment(ticket):
@@ -163,46 +176,110 @@ def _closure_days(ticket, resolution_comment):
 def _overdue_days(due_date, compared_to=None):
     if not due_date:
         return None
-    compared_to = compared_to or timezone.localdate()
+    compared_to = compared_to or _current_date()
     if hasattr(compared_to, "date"):
         compared_to = compared_to.date()
     return max((compared_to - due_date).days, 0)
 
 
-def _aggregate_rows(report, tickets, value_getter):
+def _current_date():
+    now = timezone.now()
+    if timezone.is_aware(now):
+        return timezone.localtime(now).date()
+    return now.date()
+
+
+def _model_field_names(model):
+    return {field.name for field in model._meta.fields}
+
+
+def _clean_dimension_name(value):
+    value = str(value).strip() if value is not None else ""
+    return value or str(_("Unspecified"))
+
+
+def _unique_names(names):
+    unique = []
+    seen = set()
+    for name in names:
+        clean_name = _clean_dimension_name(name)
+        if clean_name in seen:
+            continue
+        unique.append(clean_name)
+        seen.add(clean_name)
+    return unique
+
+
+def _configured_dimension_names(model, fallback_names=None):
+    field_names = _model_field_names(model)
+    queryset = model.objects.all()
+    if "is_deleted" in field_names:
+        queryset = queryset.filter(is_deleted=False)
+    if "is_active" in field_names:
+        queryset = queryset.filter(is_active=True)
+    if "name" in field_names:
+        queryset = queryset.order_by("name")
+
+    names = list(queryset.values_list("name", flat=True))
+    if not names and fallback_names:
+        names = list(fallback_names)
+    return _unique_names(names)
+
+
+def _ordered_dimension_names(configured_names, counted_names):
+    ordered = list(configured_names)
+    configured = set(configured_names)
+    ordered.extend(sorted(name for name in counted_names if name not in configured))
+    return ordered
+
+
+def _aggregate_counts(tickets, value_getter):
     counters = defaultdict(int)
     for ticket in tickets:
-        key = value_getter(ticket) or _("Unspecified")
+        key = _clean_dimension_name(value_getter(ticket))
         counters[key] += 1
-    return [
-        GrievanceReportRowGQLType(report=report, label=key, count=count)
-        for key, count in sorted(counters.items(), key=lambda item: str(item[0]))
-    ]
+    return counters
+
+
+def _dimension_rows(report, configured_names, counters, value_field):
+    rows = []
+    for name in _ordered_dimension_names(configured_names, counters.keys()):
+        row = GrievanceReportRowGQLType(
+            report=report,
+            label=name,
+            count=counters.get(name, 0),
+        )
+        setattr(row, value_field, name)
+        rows.append(row)
+    return rows
 
 
 def _category_rows(tickets):
-    rows = _aggregate_rows(REPORT_CATEGORY, tickets, lambda ticket: ticket.category)
-    for row in rows:
-        row.category = row.label
-    return rows
+    counters = _aggregate_counts(tickets, lambda ticket: ticket.category)
+    configured_names = _configured_dimension_names(
+        GrievanceCategory,
+        TicketConfig.grievance_types,
+    )
+    return _dimension_rows(REPORT_CATEGORY, configured_names, counters, "category")
 
 
 def _channel_rows(tickets):
-    rows = _aggregate_rows(REPORT_CHANNEL, tickets, lambda ticket: ticket.channel)
-    for row in rows:
-        row.channel = row.label
-    return rows
+    counters = _aggregate_counts(tickets, lambda ticket: ticket.channel)
+    configured_names = _configured_dimension_names(
+        GrievanceChannel,
+        TicketConfig.grievance_channels,
+    )
+    return _dimension_rows(REPORT_CHANNEL, configured_names, counters, "channel")
 
 
 def _resolution_status_rows(tickets):
-    rows = _aggregate_rows(
+    counters = _aggregate_counts(tickets, lambda ticket: _resolution_status(ticket.status))
+    return _dimension_rows(
         REPORT_RESOLUTION_STATUS,
-        tickets,
-        lambda ticket: _resolution_status(ticket.status),
+        _resolution_status_names(),
+        counters,
+        "status",
     )
-    for row in rows:
-        row.status = row.label
-    return rows
 
 
 def _closure_timeline_rows(report, tickets):
@@ -238,17 +315,74 @@ def _closure_timeline_rows(report, tickets):
     return rows
 
 
-def _overdue_by_paa_rows(tickets):
-    today = timezone.localdate()
+def _paa_metric_rows(report, counters, user, paa_id=None):
+    rows = []
+    seen = set()
+    for location in _paa_candidates(user, paa_id):
+        location_id = _location_identifier(location)
+        location_name = _location_name(location)
+        data = counters.get(
+            location_id,
+            {"name": location_name, "count": 0, "max_overdue_days": 0},
+        )
+        rows.append(
+            GrievanceReportRowGQLType(
+                report=report,
+                label=location_name,
+                paa_id=location_id,
+                paa_name=location_name,
+                count=data.get("count", 0),
+                overdue_days=data.get("max_overdue_days", 0),
+            )
+        )
+        seen.add(location_id)
+
+    extra_rows = [
+        (paa_key, data)
+        for paa_key, data in counters.items()
+        if paa_key not in seen
+    ]
+    for paa_key, data in sorted(extra_rows, key=lambda item: item[1]["name"]):
+        rows.append(
+            GrievanceReportRowGQLType(
+                report=report,
+                label=data["name"],
+                paa_id=paa_key,
+                paa_name=data["name"],
+                count=data.get("count", 0),
+                overdue_days=data.get("max_overdue_days", 0),
+            )
+        )
+    return rows
+
+
+def _paa_grievance_count_rows(tickets, user, paa_id=None):
+    counters = {}
+    for ticket in tickets:
+        ticket_paa_id, ticket_paa_name = _ticket_paa(ticket)
+        current = counters.setdefault(
+            ticket_paa_id,
+            {
+                "name": ticket_paa_name,
+                "count": 0,
+                "max_overdue_days": 0,
+            },
+        )
+        current["count"] += 1
+    return _paa_metric_rows(REPORT_PAA_WITHOUT_GRIEVANCES, counters, user, paa_id)
+
+
+def _overdue_by_paa_rows(tickets, user, paa_id=None):
+    today = _current_date()
     counters = {}
     for ticket in tickets:
         if not ticket.due_date or ticket.due_date >= today or ticket.status in CLOSED_STATUSES:
             continue
-        paa_id, paa_name = _ticket_paa(ticket)
+        ticket_paa_id, ticket_paa_name = _ticket_paa(ticket)
         current = counters.setdefault(
-            paa_id,
+            ticket_paa_id,
             {
-                "name": paa_name,
+                "name": ticket_paa_name,
                 "count": 0,
                 "max_overdue_days": 0,
             },
@@ -258,17 +392,7 @@ def _overdue_by_paa_rows(tickets):
             current["max_overdue_days"],
             _overdue_days(ticket.due_date, today) or 0,
         )
-    return [
-        GrievanceReportRowGQLType(
-            report=REPORT_OVERDUE_BY_PAA,
-            label=data["name"],
-            paa_id=paa_id,
-            paa_name=data["name"],
-            count=data["count"],
-            overdue_days=data["max_overdue_days"],
-        )
-        for paa_id, data in sorted(counters.items(), key=lambda item: item[1]["name"])
-    ]
+    return _paa_metric_rows(REPORT_OVERDUE_BY_PAA, counters, user, paa_id)
 
 
 def _paa_candidates(user, paa_id=None):
@@ -282,35 +406,23 @@ def _paa_candidates(user, paa_id=None):
         queryset = Location.get_queryset(queryset, user)
     if hasattr(Location, "filter_queryset"):
         queryset = Location.filter_queryset(queryset)
-    elif hasattr(Location, "is_deleted"):
+
+    field_names = _model_field_names(Location)
+    if "is_deleted" in field_names:
         queryset = queryset.filter(is_deleted=False)
 
     if paa_id:
         identifier_filter = Q(id=paa_id)
-        if any(field.name == "uuid" for field in Location._meta.fields):
+        if "uuid" in field_names:
             identifier_filter |= Q(uuid=paa_id)
         queryset = queryset.filter(identifier_filter)
 
+    for order_field in ("name", "code", "location_name"):
+        if order_field in field_names:
+            queryset = queryset.order_by(order_field)
+            break
+
     return list(queryset)
-
-
-def _paa_without_grievance_rows(tickets, user, paa_id=None):
-    ticket_paa_ids = {_ticket_paa(ticket)[0] for ticket in tickets}
-    rows = []
-    for location in _paa_candidates(user, paa_id):
-        location_id = _location_identifier(location)
-        if location_id in ticket_paa_ids:
-            continue
-        rows.append(
-            GrievanceReportRowGQLType(
-                report=REPORT_PAA_WITHOUT_GRIEVANCES,
-                label=_location_name(location),
-                count=0,
-                paa_id=location_id,
-                paa_name=_location_name(location),
-            )
-        )
-    return rows
 
 
 def resolve_grievance_report_rows(
@@ -323,13 +435,13 @@ def resolve_grievance_report_rows(
 ):
     check_ticket_perms(info)
     tickets = list(_ticket_base_queryset(date_from, date_to, agent_id))
-    if paa_id and report != REPORT_PAA_WITHOUT_GRIEVANCES:
+    if paa_id:
         tickets = [ticket for ticket in tickets if _ticket_matches_paa(ticket, paa_id)]
 
     if report == REPORT_CATEGORY:
         return _category_rows(tickets)
     if report == REPORT_PAA_WITHOUT_GRIEVANCES:
-        return _paa_without_grievance_rows(tickets, info.context.user, paa_id)
+        return _paa_grievance_count_rows(tickets, info.context.user, paa_id)
     if report == REPORT_CHANNEL:
         return _channel_rows(tickets)
     if report == REPORT_RESOLUTION_STATUS:
@@ -339,7 +451,7 @@ def resolve_grievance_report_rows(
     if report == REPORT_CLOSURE_TIMELINE_BY_PAA:
         return _closure_timeline_rows(report, tickets)
     if report == REPORT_OVERDUE_BY_PAA:
-        return _overdue_by_paa_rows(tickets)
+        return _overdue_by_paa_rows(tickets, info.context.user, paa_id)
 
     return []
 

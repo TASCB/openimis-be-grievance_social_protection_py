@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.utils import timezone
 from graphene import Schema
 from graphene.test import Client
@@ -6,28 +8,61 @@ from core.models.openimis_graphql_test_case import (
     BaseTestContext,
     openIMISGraphQLTestCase,
 )
-from grievance_social_protection.models import Ticket
+from core.test_helpers import create_test_interactive_user
+from grievance_social_protection.models import (
+    GrievanceCategory,
+    GrievanceChannel,
+    Ticket,
+)
 from grievance_social_protection.schema import Mutation, Query
-from grievance_social_protection.tests.test_helpers import create_test_grievance_user
+
+
+def _today():
+    return timezone.now().date()
 
 
 class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
     @classmethod
     def setUpClass(cls):
         super(GQLGrievanceReportsTestCase, cls).setUpClass()
-        cls.user = create_test_grievance_user(username="user_grievance_reports")
+        cls.user = create_test_interactive_user(
+            username="user_grievance_reports",
+            roles=[7],
+        )
         cls.gql_client = Client(Schema(query=Query, mutation=Mutation))
         cls.gql_context = BaseTestContext(cls.user)
 
-    def _create_ticket(self, category, channel="Report Channel", status=None):
+    def _create_category(self, name):
+        category = GrievanceCategory(
+            name=name,
+            timeline=0,
+            is_active=True,
+            user_created=self.user,
+            user_updated=self.user,
+        )
+        category.save(username=self.user.username)
+        return category
+
+    def _create_channel(self, name):
+        channel = GrievanceChannel(
+            name=name,
+            is_active=True,
+            user_created=self.user,
+            user_updated=self.user,
+        )
+        channel.save(username=self.user.username)
+        return channel
+
+    def _create_ticket(self, category, channel="Report Channel", status=None, due_date=None):
         ticket = Ticket(
             category=category,
             title=f"{category} ticket",
             resolution="2,0",
             priority="Normal",
-            date_of_incident=timezone.localdate(),
+            date_of_incident=_today(),
             channel=channel,
             flags="Default",
+            due_date=due_date,
         )
         if status:
             ticket.status = status
@@ -37,7 +72,7 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
     def test_category_report_counts_tickets_by_category(self):
         self._create_ticket("Report Category A")
         self._create_ticket("Report Category B")
-        today = timezone.localdate().isoformat()
+        today = _today().isoformat()
 
         response = self.gql_client.execute(
             f"""
@@ -56,11 +91,59 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
         self.assertEqual(rows["Report Category A"], 1)
         self.assertEqual(rows["Report Category B"], 1)
 
-    def test_resolution_status_report_groups_received_open_and_closed(self):
+    def test_category_report_includes_configured_categories_without_tickets(self):
+        self._create_category("Report Category With Ticket")
+        self._create_category("Report Category Without Ticket")
+        self._create_ticket("Report Category With Ticket")
+        today = _today().isoformat()
+
+        response = self.gql_client.execute(
+            f"""
+            query {{
+              grievanceReports(report: "CATEGORY", dateFrom: "{today}", dateTo: "{today}") {{
+                category
+                count
+              }}
+            }}
+            """,
+            context=self.gql_context.get_request(),
+        )
+
+        self.assertNotIn("errors", response)
+        rows = {row["category"]: row["count"] for row in response["data"]["grievanceReports"]}
+        self.assertEqual(rows["Report Category With Ticket"], 1)
+        self.assertEqual(rows["Report Category Without Ticket"], 0)
+
+    def test_channel_report_includes_configured_channels_without_tickets(self):
+        self._create_channel("Report Channel With Ticket")
+        self._create_channel("Report Channel Without Ticket")
+        self._create_ticket("Report Channel Category", channel="Report Channel With Ticket")
+        today = _today().isoformat()
+
+        response = self.gql_client.execute(
+            f"""
+            query {{
+              grievanceReports(report: "CHANNEL", dateFrom: "{today}", dateTo: "{today}") {{
+                channel
+                count
+              }}
+            }}
+            """,
+            context=self.gql_context.get_request(),
+        )
+
+        self.assertNotIn("errors", response)
+        rows = {row["channel"]: row["count"] for row in response["data"]["grievanceReports"]}
+        self.assertEqual(rows["Report Channel With Ticket"], 1)
+        self.assertEqual(rows["Report Channel Without Ticket"], 0)
+
+    def test_resolution_status_report_counts_each_status(self):
         self._create_ticket("Report Status Received")
         self._create_ticket("Report Status Open", status=Ticket.TicketStatus.OPEN)
         self._create_ticket("Report Status Closed", status=Ticket.TicketStatus.CLOSED)
-        today = timezone.localdate().isoformat()
+        self._create_ticket("Report Status In Progress", status=Ticket.TicketStatus.IN_PROGRESS)
+        self._create_ticket("Report Status Resolved", status=Ticket.TicketStatus.RESOLVED)
+        today = _today().isoformat()
 
         response = self.gql_client.execute(
             f"""
@@ -83,3 +166,63 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
         self.assertEqual(rows["Received"], 1)
         self.assertEqual(rows["Open"], 1)
         self.assertEqual(rows["Closed"], 1)
+        self.assertEqual(rows["In Progress"], 1)
+        self.assertEqual(rows["Resolved"], 1)
+
+    def test_resolution_status_report_includes_missing_statuses_with_zero(self):
+        self._create_ticket("Report Status Only Received")
+        today = _today().isoformat()
+
+        response = self.gql_client.execute(
+            f"""
+            query {{
+              grievanceReports(
+                report: "RESOLUTION_STATUS",
+                dateFrom: "{today}",
+                dateTo: "{today}"
+              ) {{
+                status
+                count
+              }}
+            }}
+            """,
+            context=self.gql_context.get_request(),
+        )
+
+        self.assertNotIn("errors", response)
+        rows = {row["status"]: row["count"] for row in response["data"]["grievanceReports"]}
+        self.assertEqual(rows["Received"], 1)
+        self.assertEqual(rows["Open"], 0)
+        self.assertEqual(rows["Closed"], 0)
+        self.assertEqual(rows["In Progress"], 0)
+        self.assertEqual(rows["Resolved"], 0)
+
+    def test_overdue_by_paa_report_handles_naive_current_datetime(self):
+        today = _today()
+        self._create_ticket(
+            "Report Overdue Category",
+            due_date=today - timedelta(days=3),
+        )
+
+        response = self.gql_client.execute(
+            f"""
+            query {{
+              grievanceReports(
+                report: "OVERDUE_BY_PAA",
+                dateFrom: "{today.isoformat()}",
+                dateTo: "{today.isoformat()}"
+              ) {{
+                paaName
+                count
+                overdueDays
+              }}
+            }}
+            """,
+            context=self.gql_context.get_request(),
+        )
+
+        self.assertNotIn("errors", response)
+        rows = response["data"]["grievanceReports"]
+        self.assertTrue(
+            any(row["count"] >= 1 and row["overdueDays"] >= 3 for row in rows)
+        )

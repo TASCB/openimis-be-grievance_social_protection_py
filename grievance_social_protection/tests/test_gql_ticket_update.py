@@ -1,13 +1,77 @@
-from django.test import TestCase
+from types import SimpleNamespace
+
+from django.core.exceptions import PermissionDenied
+from django.test import SimpleTestCase
 from core.models import MutationLog
 from graphene import Schema
 from graphene.test import Client
 from core.test_helpers import create_test_interactive_user
+from grievance_social_protection.apps import TicketConfig
 from grievance_social_protection.models import Ticket
 from grievance_social_protection.schema import Query, Mutation
+from grievance_social_protection.gql_mutations import UpdateTicketMutation
 from grievance_social_protection.tests.gql_payloads import gql_mutation_update_ticket
 from grievance_social_protection.tests.test_helpers import create_ticket
 from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase, BaseTestContext
+
+
+class UserWithRights:
+    def __init__(self, rights):
+        self.rights = set(rights)
+
+    def has_perms(self, permissions):
+        return any(int(permission) in self.rights for permission in permissions)
+
+
+class UpdateTicketAuthorizationTestCase(SimpleTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.gql_client = Client(Schema(query=Query, mutation=Mutation))
+
+    def test_update_ticket_rejects_creator_without_update_permission(self):
+        self._assert_update_authorization_error({127000, 127001})
+
+    def test_update_ticket_rejects_view_only_user(self):
+        self._assert_update_authorization_error({127000})
+
+    def test_update_ticket_allows_user_with_update_permission(self):
+        UpdateTicketMutation._authorize_update(
+            UserWithRights({127002}),
+            title="Authorized update",
+            status=Ticket.TicketStatus.IN_PROGRESS,
+        )
+
+    def test_update_ticket_permission_fails_closed_when_config_is_empty(self):
+        configured_permissions = TicketConfig.gql_mutation_update_tickets_perms
+        TicketConfig.gql_mutation_update_tickets_perms = []
+        try:
+            with self.assertRaises(PermissionDenied):
+                UpdateTicketMutation._authorize_update(UserWithRights(set()))
+            UpdateTicketMutation._authorize_update(UserWithRights({127002}))
+        finally:
+            TicketConfig.gql_mutation_update_tickets_perms = configured_permissions
+
+    def _assert_update_authorization_error(self, rights):
+        payload = gql_mutation_update_ticket % (
+            "00000000-0000-0000-0000-000000000000",
+            "Default",
+            "Unauthorized update",
+            "2,5",
+            "Medium",
+            "2024-11-20",
+            "Channel A",
+            "Default",
+            "OPEN",
+            "unauthorized-update",
+        )
+        context = SimpleNamespace(user=UserWithRights(rights))
+
+        result = self.gql_client.execute(payload, context=context)
+
+        self.assertIn("errors", result)
+        self.assertIn("authorized", result["errors"][0]["message"].lower())
+        self.assertIsNone(result["data"]["updateTicket"])
 
 
 class GQLTicketUpdateTestCase(openIMISGraphQLTestCase):

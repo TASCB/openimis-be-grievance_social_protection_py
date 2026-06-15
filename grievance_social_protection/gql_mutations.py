@@ -25,6 +25,39 @@ from .services import (
     GrievanceChannelService,
 )
 from .validations import user_associated_with_ticket
+from .location_scope import ensure_ticket_access
+
+
+TERMINAL_TICKET_STATUSES = {
+    Ticket.TicketStatus.RESOLVED,
+    Ticket.TicketStatus.CLOSED,
+}
+
+
+def _context_user(info):
+    return getattr(getattr(info, "context", None), "user", None)
+
+
+def _require_permission(user, field):
+    if user is None or not user.has_perms(TicketConfig.permissions(field)):
+        raise PermissionDenied(_("unauthorized"))
+
+
+def _require_comment_access(user, ticket_id):
+    _require_ticket_access(user, ticket_id)
+    if user is not None and user.has_perms(
+        TicketConfig.permissions("gql_mutation_create_comment_perms")
+    ):
+        return
+    if user_associated_with_ticket(user, ticket_id):
+        return
+    raise PermissionDenied(_("unauthorized"))
+
+
+def _require_ticket_access(user, ticket_id):
+    ticket = Ticket.objects.filter(id=ticket_id).first()
+    ensure_ticket_access(user, ticket)
+    return ticket
 
 
 class CreateTicketInputType(OpenIMISMutation.Input):
@@ -50,6 +83,11 @@ class CreateTicketInputType(OpenIMISMutation.Input):
     channel = graphene.String(required=False)
     json_ext = graphene.types.json.JSONString(required=False)
     resolution = graphene.String(required=False)
+    event_location_id = graphene.Int(required=False)
+    region_id = graphene.Int(required=False)
+    district_id = graphene.Int(required=False)
+    ward_id = graphene.Int(required=False)
+    village_id = graphene.Int(required=False)
 
 
 class UpdateTicketInputType(CreateTicketInputType):
@@ -72,6 +110,11 @@ class CloseTicketInputType(OpenIMISMutation.Input):
     flags = graphene.String(required=False)
     channel = graphene.String(required=False)
     resolution = graphene.String(required=False)
+    event_location_id = graphene.Int(required=False)
+    region_id = graphene.Int(required=False)
+    district_id = graphene.Int(required=False)
+    ward_id = graphene.Int(required=False)
+    village_id = graphene.Int(required=False)
     commenter_type = graphene.String(required=False, max_lenght=255)
     commenter_id = graphene.String(required=False, max_lenght=255)
     comment = graphene.String(required=True)
@@ -90,10 +133,20 @@ class CreateTicketMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
     _model = Ticket
 
     @classmethod
+    def _authorize_create(cls, user, **data):
+        _require_permission(user, "gql_mutation_create_tickets_perms")
+        if data.get("status") in TERMINAL_TICKET_STATUSES:
+            _require_permission(user, "gql_mutation_resolve_grievance_perms")
+
+    @classmethod
+    def mutate_and_get_payload(cls, root, info, **data):
+        cls._authorize_create(_context_user(info), **data)
+        return super().mutate_and_get_payload(root, info, **data)
+
+    @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_create_tickets_perms):
-            raise PermissionDenied(_("unauthorized"))
+        cls._authorize_create(user, **data)
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -124,10 +177,22 @@ class UpdateTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     _model = Ticket
 
     @classmethod
+    def _authorize_update(cls, user, **data):
+        _require_permission(user, "gql_mutation_update_tickets_perms")
+        if data.get("id"):
+            _require_ticket_access(user, data["id"])
+        if data.get("status") in TERMINAL_TICKET_STATUSES:
+            _require_permission(user, "gql_mutation_resolve_grievance_perms")
+
+    @classmethod
+    def mutate_and_get_payload(cls, root, info, **data):
+        cls._authorize_update(_context_user(info), **data)
+        return super().mutate_and_get_payload(root, info, **data)
+
+    @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_update_tickets_perms):
-            raise PermissionDenied(_("unauthorized"))
+        cls._authorize_update(user, **data)
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -159,8 +224,9 @@ class DeleteTicketMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
-            raise ValidationError("mutation.authentication_required")
+        _require_permission(user, "gql_mutation_delete_tickets_perms")
+        for ticket_id in data.get("ids", []):
+            _require_ticket_access(user, ticket_id)
 
     class Input(OpenIMISMutation.Input):
         ids = graphene.List(graphene.UUID)
@@ -172,13 +238,14 @@ class CreateCommentMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
     _model = Comment
 
     @classmethod
+    def mutate_and_get_payload(cls, root, info, **data):
+        _require_comment_access(_context_user(info), data.get("ticket_id"))
+        return super().mutate_and_get_payload(root, info, **data)
+
+    @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
-            return
-        if user_associated_with_ticket(user):
-            return
-        raise ValidationError("mutation.authentication_required")
+        _require_comment_access(user, data.get("ticket_id"))
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -208,10 +275,23 @@ class ResolveGrievanceByCommentMutation(
     _model = Comment
 
     @classmethod
+    def mutate_and_get_payload(cls, root, info, **data):
+        _require_permission(
+            _context_user(info),
+            "gql_mutation_resolve_grievance_perms",
+        )
+        comment = Comment.objects.filter(id=data.get("id")).select_related("ticket").first()
+        if comment is not None:
+            ensure_ticket_access(_context_user(info), comment.ticket)
+        return super().mutate_and_get_payload(root, info, **data)
+
+    @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_resolve_grievance_perms):
-            raise ValidationError("mutation.authentication_required")
+        _require_permission(user, "gql_mutation_resolve_grievance_perms")
+        comment = Comment.objects.filter(id=data.get("id")).select_related("ticket").first()
+        if comment is not None:
+            ensure_ticket_access(user, comment.ticket)
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -242,10 +322,16 @@ class ReopenTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     _model = Ticket
 
     @classmethod
+    def mutate_and_get_payload(cls, root, info, **data):
+        _require_permission(_context_user(info), "gql_mutation_update_tickets_perms")
+        _require_ticket_access(_context_user(info), data.get("id"))
+        return super().mutate_and_get_payload(root, info, **data)
+
+    @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_update_tickets_perms):
-            raise ValidationError("mutation.authentication_required")
+        _require_permission(user, "gql_mutation_update_tickets_perms")
+        _require_ticket_access(user, data.get("id"))
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -276,13 +362,21 @@ class CloseTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     _model = Ticket
 
     @classmethod
+    def _authorize_close(cls, user):
+        _require_permission(user, "gql_mutation_update_tickets_perms")
+        _require_permission(user, "gql_mutation_resolve_grievance_perms")
+
+    @classmethod
+    def mutate_and_get_payload(cls, root, info, **data):
+        cls._authorize_close(_context_user(info))
+        _require_ticket_access(_context_user(info), data.get("id"))
+        return super().mutate_and_get_payload(root, info, **data)
+
+    @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not (
-            user.has_perms(TicketConfig.gql_mutation_update_tickets_perms)
-            and user.has_perms(TicketConfig.gql_mutation_resolve_grievance_perms)
-        ):
-            raise ValidationError("mutation.authentication_required")
+        cls._authorize_close(user)
+        _require_ticket_access(user, data.get("id"))
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -327,8 +421,7 @@ class CreateGrievanceCategoryMutation(BaseHistoryModelCreateMutationMixin, BaseM
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_create_tickets_perms):
-            raise PermissionDenied(_("unauthorized"))
+        _require_permission(user, "gql_mutation_create_tickets_perms")
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -352,8 +445,7 @@ class UpdateGrievanceCategoryMutation(BaseHistoryModelUpdateMutationMixin, BaseM
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_update_tickets_perms):
-            raise PermissionDenied(_("unauthorized"))
+        _require_permission(user, "gql_mutation_update_tickets_perms")
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -377,8 +469,7 @@ class DeleteGrievanceCategoryMutation(BaseHistoryModelDeleteMutationMixin, BaseM
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
-            raise ValidationError("mutation.authentication_required")
+        _require_permission(user, "gql_mutation_delete_tickets_perms")
         for cat_id in data.get("ids", []):
             if GrievanceType.objects.filter(category_id=cat_id, is_deleted=False).exists():
                 raise ValidationError(
@@ -408,8 +499,7 @@ class CreateGrievanceTypeMutation(BaseHistoryModelCreateMutationMixin, BaseMutat
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_create_tickets_perms):
-            raise PermissionDenied(_("unauthorized"))
+        _require_permission(user, "gql_mutation_create_tickets_perms")
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -433,8 +523,7 @@ class UpdateGrievanceTypeMutation(BaseHistoryModelUpdateMutationMixin, BaseMutat
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_update_tickets_perms):
-            raise PermissionDenied(_("unauthorized"))
+        _require_permission(user, "gql_mutation_update_tickets_perms")
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -458,8 +547,7 @@ class DeleteGrievanceTypeMutation(BaseHistoryModelDeleteMutationMixin, BaseMutat
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
-            raise ValidationError("mutation.authentication_required")
+        _require_permission(user, "gql_mutation_delete_tickets_perms")
 
     class Input(OpenIMISMutation.Input):
         ids = graphene.List(graphene.UUID)
@@ -482,8 +570,7 @@ class CreateGrievanceChannelMutation(BaseHistoryModelCreateMutationMixin, BaseMu
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_create_tickets_perms):
-            raise PermissionDenied(_("unauthorized"))
+        _require_permission(user, "gql_mutation_create_tickets_perms")
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -507,8 +594,7 @@ class UpdateGrievanceChannelMutation(BaseHistoryModelUpdateMutationMixin, BaseMu
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_update_tickets_perms):
-            raise PermissionDenied(_("unauthorized"))
+        _require_permission(user, "gql_mutation_update_tickets_perms")
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -532,8 +618,7 @@ class DeleteGrievanceChannelMutation(BaseHistoryModelDeleteMutationMixin, BaseMu
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
-        if not user.has_perms(TicketConfig.gql_mutation_delete_tickets_perms):
-            raise ValidationError("mutation.authentication_required")
+        _require_permission(user, "gql_mutation_delete_tickets_perms")
 
     class Input(OpenIMISMutation.Input):
         ids = graphene.List(graphene.UUID)

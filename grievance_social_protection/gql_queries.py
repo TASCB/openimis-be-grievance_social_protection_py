@@ -2,19 +2,40 @@ import graphene
 from graphene import ObjectType
 from graphene_django import DjangoObjectType
 from collections import defaultdict
+from datetime import timedelta
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from django.apps import apps
-from django.db.models import Q
+from django.db.models import (
+    Case,
+    DateField,
+    DateTimeField,
+    DurationField,
+    ExpressionWrapper,
+    F,
+    Func,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
+from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.utils.translation import gettext as _
 from core.gql_queries import UserGQLType
+from location.gql_queries import LocationGQLType
 from .apps import TicketConfig
 from .models import Ticket, Comment, TicketAttachment
 from core import prefix_filterset, ExtendedConnection, filter_validity
 from .util import model_obj_to_json
-from .validations import user_associated_with_ticket
 from .models import GrievanceType, GrievanceCategory, GrievanceChannel
+from .location_scope import (
+    get_location_scope,
+    location_chain,
+    ticket_queryset_for_user,
+)
 
 
 REPORT_CATEGORY = "CATEGORY"
@@ -29,18 +50,62 @@ CLOSED_STATUSES = [
     Ticket.TicketStatus.CLOSED,
     Ticket.TicketStatus.RESOLVED,
 ]
+OPEN_STATUSES = [
+    Ticket.TicketStatus.RECEIVED,
+    Ticket.TicketStatus.OPEN,
+    Ticket.TicketStatus.IN_PROGRESS,
+]
+
+TIMELINE_STATUS_OVERDUE = "OVERDUE"
+TIMELINE_STATUS_ON_TIME = "ON_TIME"
+TIMELINE_STATUS_RESOLVED_LATE = "RESOLVED_LATE"
+TIMELINE_STATUS_NOT_APPLICABLE = "N_A"
+
+
+class AddDays(Func):
+    arity = 2
+    output_field = DateField()
+
+    def as_sql(self, compiler, connection, **extra_context):
+        date_sql, date_params = compiler.compile(self.source_expressions[0])
+        days_sql, days_params = compiler.compile(self.source_expressions[1])
+        return f"({date_sql} + {days_sql})", (*date_params, *days_params)
+
+    def as_microsoft(self, compiler, connection, **extra_context):
+        date_sql, date_params = compiler.compile(self.source_expressions[0])
+        days_sql, days_params = compiler.compile(self.source_expressions[1])
+        return (
+            f"DATEADD(day, {days_sql}, {date_sql})",
+            (*days_params, *date_params),
+        )
+
+    def as_mysql(self, compiler, connection, **extra_context):
+        date_sql, date_params = compiler.compile(self.source_expressions[0])
+        days_sql, days_params = compiler.compile(self.source_expressions[1])
+        return (
+            f"DATE_ADD({date_sql}, INTERVAL {days_sql} DAY)",
+            (*date_params, *days_params),
+        )
+
+    def as_sqlite(self, compiler, connection, **extra_context):
+        date_sql, date_params = compiler.compile(self.source_expressions[0])
+        days_sql, days_params = compiler.compile(self.source_expressions[1])
+        return (
+            f"DATE({date_sql}, printf('+%d days', {days_sql}))",
+            (*date_params, *days_params),
+        )
 
 
 def check_ticket_perms(info):
-    if not info.context.user.has_perms(TicketConfig.gql_query_tickets_perms):
+    if not info.context.user.has_perms(
+        TicketConfig.permissions("gql_query_tickets_perms")
+    ):
         raise PermissionDenied(_("unauthorized"))
 
 
 def check_comment_perms(info):
-    user = info.context.user
-    if not (
-        user_associated_with_ticket(user)
-        or user.has_perms(TicketConfig.gql_query_comments_perms)
+    if not info.context.user.has_perms(
+        TicketConfig.permissions("gql_query_comments_perms")
     ):
         raise PermissionDenied(_("Unauthorized"))
 
@@ -64,12 +129,226 @@ class GrievanceReportRowGQLType(ObjectType):
     due_date = graphene.Date()
     closure_days = graphene.Float()
     overdue_days = graphene.Int()
+    overdue = graphene.Boolean()
+    timeline_status = graphene.String()
+    time_taken_seconds = graphene.Float()
 
 
-def _ticket_base_queryset(date_from=None, date_to=None, agent_id=None):
-    queryset = Ticket.objects.filter(is_deleted=False).select_related(
-        "attending_staff", "reporter_type"
+class GrievanceLocationScopeGQLType(ObjectType):
+    restricted = graphene.Boolean(required=True)
+    required = graphene.Boolean(required=True)
+    assigned_location = graphene.Field(LocationGQLType)
+    assigned_locations = graphene.List(LocationGQLType, required=True)
+    region = graphene.Field(LocationGQLType)
+    district = graphene.Field(LocationGQLType)
+    ward = graphene.Field(LocationGQLType)
+    village = graphene.Field(LocationGQLType)
+
+
+def build_grievance_location_scope(user):
+    Location = apps.get_model("location", "Location")
+    scope = get_location_scope(user)
+    assigned_locations = list(
+        Location.filter_queryset(
+            Location.objects.filter(id__in=scope.direct_location_ids).select_related(
+                "parent",
+                "parent__parent",
+                "parent__parent__parent",
+            )
+        ).order_by("type", "code")
     )
+    assigned_location = assigned_locations[0] if len(assigned_locations) == 1 else None
+    chain = location_chain(assigned_location) if assigned_location else {}
+    return GrievanceLocationScopeGQLType(
+        restricted=scope.restricted,
+        required=scope.restricted,
+        assigned_location=assigned_location,
+        assigned_locations=assigned_locations,
+        region=chain.get("R"),
+        district=chain.get("D"),
+        ward=chain.get("W"),
+        village=chain.get("V"),
+    )
+
+
+def grievance_locations_for_user(user, location_type, parent_id=None, search=None):
+    Location = apps.get_model("location", "Location")
+    scope = get_location_scope(user)
+    queryset = Location.filter_queryset(
+        Location.objects.filter(type=location_type)
+    )
+
+    if scope.restricted:
+        visible_ids = set(scope.allowed_location_ids)
+        assigned_locations = Location.objects.filter(
+            id__in=scope.direct_location_ids
+        ).select_related("parent", "parent__parent", "parent__parent__parent")
+        for assigned_location in assigned_locations:
+            current = assigned_location
+            while current is not None:
+                visible_ids.add(current.id)
+                current = current.parent
+        queryset = queryset.filter(id__in=visible_ids)
+
+    if parent_id is not None:
+        queryset = queryset.filter(parent_id=parent_id)
+    if search:
+        queryset = queryset.filter(
+            Q(name__icontains=search) | Q(code__icontains=search)
+        )
+    return queryset.order_by("name")[:100]
+
+
+def annotate_ticket_metrics(queryset, now=None):
+    now = now or timezone.now()
+    today = _local_date(now)
+    category_timeline = GrievanceCategory.objects.filter(
+        name=OuterRef("category"),
+        is_deleted=False,
+        is_active=True,
+        timeline__gt=0,
+    ).values("timeline")[:1]
+    resolution_closed_at = Comment.objects.filter(
+        ticket_id=OuterRef("id"),
+        is_resolution=True,
+        is_deleted=False,
+    ).order_by("-date_created").values("date_created")[:1]
+
+    queryset = queryset.annotate(
+        _timeline_days=Subquery(category_timeline, output_field=IntegerField()),
+        _resolution_closed_at=Subquery(
+            resolution_closed_at,
+            output_field=DateTimeField(),
+        ),
+    )
+    queryset = queryset.annotate(
+        _expected_resolution_date=Coalesce(
+            F("due_date"),
+            Case(
+                When(
+                    _timeline_days__gt=0,
+                    then=AddDays(
+                        Cast(F("date_created"), output_field=DateField()),
+                        F("_timeline_days"),
+                    ),
+                ),
+                default=Value(None),
+                output_field=DateField(),
+            ),
+        ),
+        _closed_at=Case(
+            When(
+                status__in=CLOSED_STATUSES,
+                then=Coalesce(F("_resolution_closed_at"), F("date_updated")),
+            ),
+            default=Value(None),
+            output_field=DateTimeField(),
+        ),
+    )
+    queryset = queryset.annotate(
+        _time_taken_duration=ExpressionWrapper(
+            Coalesce(
+                F("_closed_at"),
+                Value(now, output_field=DateTimeField()),
+            )
+            - F("date_created"),
+            output_field=DurationField(),
+        ),
+        _overdue_sort=Case(
+            When(
+                _expected_resolution_date__lt=today,
+                status__in=OPEN_STATUSES,
+                then=Value(1),
+            ),
+            default=Value(0),
+            output_field=IntegerField(),
+        ),
+    )
+    return queryset
+
+
+def _local_date(value):
+    if not value:
+        return None
+    if hasattr(value, "date"):
+        if timezone.is_aware(value):
+            return timezone.localtime(value).date()
+        return value.date()
+    return value
+
+
+def ticket_expected_resolution_date(ticket):
+    annotated = getattr(ticket, "_expected_resolution_date", None)
+    if annotated:
+        return annotated
+    if ticket.due_date:
+        return ticket.due_date
+    timeline = (
+        GrievanceCategory.objects.filter(
+            name=ticket.category,
+            is_deleted=False,
+            is_active=True,
+            timeline__gt=0,
+        )
+        .values_list("timeline", flat=True)
+        .first()
+    )
+    created_date = _local_date(ticket.date_created)
+    if not timeline or not created_date:
+        return None
+    return created_date + timedelta(days=timeline)
+
+
+def ticket_closed_at(ticket):
+    if ticket.status not in CLOSED_STATUSES:
+        return None
+    annotated = getattr(ticket, "_closed_at", None)
+    if annotated:
+        return annotated
+    resolution_comment = _resolution_comment(ticket)
+    return resolution_comment.date_created if resolution_comment else ticket.date_updated
+
+
+def ticket_time_taken_seconds(ticket, now=None):
+    annotated = getattr(ticket, "_time_taken_duration", None)
+    if annotated is not None:
+        return max(annotated.total_seconds(), 0)
+    end = ticket_closed_at(ticket) or now or timezone.now()
+    if not ticket.date_created or not end:
+        return None
+    return max((end - ticket.date_created).total_seconds(), 0)
+
+
+def ticket_timeline_status(ticket, today=None):
+    expected_date = ticket_expected_resolution_date(ticket)
+    if not expected_date:
+        return TIMELINE_STATUS_NOT_APPLICABLE
+    today = today or _current_date()
+    closed_at = ticket_closed_at(ticket)
+    if closed_at and _local_date(closed_at) > expected_date:
+        return TIMELINE_STATUS_RESOLVED_LATE
+    if ticket.status in OPEN_STATUSES and today > expected_date:
+        return TIMELINE_STATUS_OVERDUE
+    return TIMELINE_STATUS_ON_TIME
+
+
+def ticket_is_overdue(ticket, today=None):
+    if not ticket_expected_resolution_date(ticket):
+        return None
+    return ticket_timeline_status(ticket, today) == TIMELINE_STATUS_OVERDUE
+
+
+def _ticket_base_queryset(user, date_from=None, date_to=None, agent_id=None):
+    queryset = Ticket.objects.filter(is_deleted=False).select_related(
+        "attending_staff",
+        "reporter_type",
+        "event_location",
+        "event_location__parent",
+        "event_location__parent__parent",
+        "event_location__parent__parent__parent",
+    )
+    queryset = ticket_queryset_for_user(queryset, user)
+    queryset = annotate_ticket_metrics(queryset)
     if date_from:
         queryset = queryset.filter(date_created__date__gte=date_from)
     if date_to:
@@ -96,6 +375,8 @@ def _location_name(location):
 
 
 def _reporter_location(ticket):
+    if ticket.event_location:
+        return ticket.event_location
     reporter = ticket.reporter
     if not reporter:
         return None
@@ -161,24 +442,16 @@ def _resolution_status_names():
 def _resolution_comment(ticket):
     return (
         Comment.objects.filter(ticket=ticket, is_resolution=True, is_deleted=False)
-        .order_by("date_created")
+        .order_by("-date_created")
         .first()
     )
-
-
-def _closure_days(ticket, resolution_comment):
-    if not resolution_comment or not ticket.date_created:
-        return None
-    delta = resolution_comment.date_created - ticket.date_created
-    return round(delta.total_seconds() / 86400, 2)
 
 
 def _overdue_days(due_date, compared_to=None):
     if not due_date:
         return None
     compared_to = compared_to or _current_date()
-    if hasattr(compared_to, "date"):
-        compared_to = compared_to.date()
+    compared_to = _local_date(compared_to)
     return max((compared_to - due_date).days, 0)
 
 
@@ -287,7 +560,9 @@ def _closure_timeline_rows(report, tickets):
     for ticket in tickets:
         if ticket.status not in CLOSED_STATUSES:
             continue
-        resolution_comment = _resolution_comment(ticket)
+        closed_at = ticket_closed_at(ticket)
+        expected_resolution_date = ticket_expected_resolution_date(ticket)
+        time_taken_seconds = ticket_time_taken_seconds(ticket)
         paa_id, paa_name = _ticket_paa(ticket)
         rows.append(
             GrievanceReportRowGQLType(
@@ -303,13 +578,20 @@ def _closure_timeline_rows(report, tickets):
                 ticket_code=ticket.code,
                 ticket_title=ticket.title,
                 date_received=ticket.date_created,
-                date_closed=resolution_comment.date_created if resolution_comment else None,
-                due_date=ticket.due_date,
-                closure_days=_closure_days(ticket, resolution_comment),
-                overdue_days=_overdue_days(
-                    ticket.due_date,
-                    resolution_comment.date_created if resolution_comment else None,
+                date_closed=closed_at,
+                due_date=expected_resolution_date,
+                closure_days=(
+                    round(time_taken_seconds / 86400, 2)
+                    if time_taken_seconds is not None
+                    else None
                 ),
+                overdue_days=_overdue_days(
+                    expected_resolution_date,
+                    closed_at,
+                ),
+                overdue=ticket_is_overdue(ticket),
+                timeline_status=ticket_timeline_status(ticket),
+                time_taken_seconds=time_taken_seconds,
             )
         )
     return rows
@@ -376,7 +658,7 @@ def _overdue_by_paa_rows(tickets, user, paa_id=None):
     today = _current_date()
     counters = {}
     for ticket in tickets:
-        if not ticket.due_date or ticket.due_date >= today or ticket.status in CLOSED_STATUSES:
+        if not ticket_is_overdue(ticket, today):
             continue
         ticket_paa_id, ticket_paa_name = _ticket_paa(ticket)
         current = counters.setdefault(
@@ -390,7 +672,7 @@ def _overdue_by_paa_rows(tickets, user, paa_id=None):
         current["count"] += 1
         current["max_overdue_days"] = max(
             current["max_overdue_days"],
-            _overdue_days(ticket.due_date, today) or 0,
+            _overdue_days(ticket_expected_resolution_date(ticket), today) or 0,
         )
     return _paa_metric_rows(REPORT_OVERDUE_BY_PAA, counters, user, paa_id)
 
@@ -434,7 +716,9 @@ def resolve_grievance_report_rows(
     paa_id=None,
 ):
     check_ticket_perms(info)
-    tickets = list(_ticket_base_queryset(date_from, date_to, agent_id))
+    tickets = list(
+        _ticket_base_queryset(info.context.user, date_from, date_to, agent_id)
+    )
     if paa_id:
         tickets = [ticket for ticket in tickets if _ticket_matches_paa(ticket, paa_id)]
 
@@ -467,6 +751,67 @@ class TicketGQLType(DjangoObjectType):
     reporter_first_name = graphene.String()
     reporter_last_name = graphene.String()
     reporter_dob = graphene.String()
+    event_location = graphene.Field(LocationGQLType)
+    region = graphene.Field(LocationGQLType)
+    district = graphene.Field(LocationGQLType)
+    ward = graphene.Field(LocationGQLType)
+    village = graphene.Field(LocationGQLType)
+    expected_resolution_date = graphene.Date()
+    closed_at = graphene.DateTime()
+    overdue = graphene.Boolean()
+    timeline_status = graphene.String()
+    time_taken_seconds = graphene.Float()
+
+    @staticmethod
+    def _resolve_location_type(root, info, location_type):
+        check_ticket_perms(info)
+        return location_chain(root.event_location).get(location_type)
+
+    @staticmethod
+    def resolve_event_location(root, info):
+        check_ticket_perms(info)
+        return root.event_location
+
+    @staticmethod
+    def resolve_region(root, info):
+        return TicketGQLType._resolve_location_type(root, info, "R")
+
+    @staticmethod
+    def resolve_district(root, info):
+        return TicketGQLType._resolve_location_type(root, info, "D")
+
+    @staticmethod
+    def resolve_ward(root, info):
+        return TicketGQLType._resolve_location_type(root, info, "W")
+
+    @staticmethod
+    def resolve_village(root, info):
+        return TicketGQLType._resolve_location_type(root, info, "V")
+
+    @staticmethod
+    def resolve_expected_resolution_date(root, info):
+        check_ticket_perms(info)
+        return ticket_expected_resolution_date(root)
+
+    @staticmethod
+    def resolve_closed_at(root, info):
+        check_ticket_perms(info)
+        return ticket_closed_at(root)
+
+    @staticmethod
+    def resolve_overdue(root, info):
+        check_ticket_perms(info)
+        return ticket_is_overdue(root)
+
+    @staticmethod
+    def resolve_timeline_status(root, info):
+        check_ticket_perms(info)
+        return ticket_timeline_status(root)
+
+    @staticmethod
+    def resolve_time_taken_seconds(root, info):
+        check_ticket_perms(info)
+        return ticket_time_taken_seconds(root)
 
     @staticmethod
     def resolve_reporter_type(root, info):
@@ -568,6 +913,7 @@ class TicketGQLType(DjangoObjectType):
             "due_date": ["exact", "istartswith", "icontains", "iexact"],
             "date_of_incident": ["exact", "istartswith", "icontains", "iexact"],
             "date_created": ["exact", "istartswith", "icontains", "iexact"],
+            "event_location": ["exact", "isnull"],
             **prefix_filterset("attending_staff__", UserGQLType._meta.filter_fields),
         }
 

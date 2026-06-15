@@ -54,6 +54,14 @@ class Ticket(HistoryBusinessModel):
     flags = models.CharField(max_length=255, blank=True, null=True)
     channel = models.CharField(max_length=255, blank=True, null=True)
     resolution = models.CharField(max_length=255, blank=True, null=True)
+    event_location = models.ForeignKey(
+        "location.Location",
+        models.DO_NOTHING,
+        db_column="EventLocationId",
+        related_name="grievance_tickets",
+        blank=True,
+        null=True,
+    )
 
     def clean(self):
         super().clean()
@@ -67,19 +75,19 @@ class Ticket(HistoryBusinessModel):
     def filter_queryset(cls, queryset=None):
         if queryset is None:
             queryset = cls.objects.all()
-        queryset = queryset.filter(*core.filter_validity())
+        queryset = queryset.filter(date_valid_to__isnull=True)
         return queryset
 
     @classmethod
     def get_queryset(cls, queryset, user):
+        from .location_scope import ticket_queryset_for_user
+
         queryset = cls.filter_queryset(queryset)
         if isinstance(user, ResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=None)
-        if settings.ROW_SECURITY:
-            pass
-        return queryset
+        return ticket_queryset_for_user(queryset, user)
 
 
 class TicketMutation(core_models.UUIDModel, core_models.ObjectMutation):

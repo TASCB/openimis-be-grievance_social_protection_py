@@ -126,11 +126,13 @@ def validate_commenter_associated_with_ticket(data):
     return [{"message": _("validations.CommentValidation.commenter_not_associated_with_ticket")}]
 
 
-def user_associated_with_ticket(user):
-    if isinstance(user, User):
-        if Ticket.objects.filter(attending_staff=user).exists():
-            return True
-    return False
+def user_associated_with_ticket(user, ticket_id):
+    if not isinstance(user, User) or not ticket_id:
+        return False
+    return Ticket.objects.filter(
+        attending_staff=user,
+        id=ticket_id,
+    ).exists()
 
 
 def validate_ticket_unique_code(data):

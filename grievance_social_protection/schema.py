@@ -12,6 +12,7 @@ from graphql_relay import from_global_id
 from django.utils.translation import gettext_lazy as _
 from .gql_queries import GrievanceTypeGQL, GrievanceCategoryGQL, GrievanceChannelGQL
 from .models import TicketAttachment
+from .location_scope import location_subtree_ids, ticket_queryset_for_user
 
 
 class Query(graphene.ObjectType):
@@ -21,6 +22,12 @@ class Query(graphene.ObjectType):
         show_history=graphene.Boolean(),
         client_mutation_id=graphene.String(),
         ticket_version=graphene.Int(),
+        location_id=graphene.Int(),
+        region_id=graphene.Int(),
+        district_id=graphene.Int(),
+        ward_id=graphene.Int(),
+        village_id=graphene.Int(),
+        overdue=graphene.Boolean(),
     )
 
     ticketsStr = OrderedDjangoFilterConnectionField(
@@ -39,6 +46,13 @@ class Query(graphene.ObjectType):
     )
 
     grievance_config = graphene.Field(GrievanceTypeConfigurationGQLType)
+    grievance_location_scope = graphene.Field(GrievanceLocationScopeGQLType)
+    grievance_locations = graphene.List(
+        LocationGQLType,
+        location_type=graphene.String(required=True),
+        parent_id=graphene.Int(),
+        search=graphene.String(),
+    )
 
     comments = OrderedDjangoFilterConnectionField(
         CommentGQLType,
@@ -77,23 +91,53 @@ class Query(graphene.ObjectType):
     def resolve_comments(self, info, **kwargs):
         user = info.context.user
 
-        if not (
-            user_associated_with_ticket(user)
-            or user.has_perms(TicketConfig.gql_query_comments_perms)
+        if not user.has_perms(
+            TicketConfig.permissions("gql_query_comments_perms")
         ):
             raise PermissionDenied(_("Unauthorized"))
 
-        return gql_optimizer.query(Comment.objects.all(), info)
+        allowed_tickets = Ticket.get_queryset(Ticket.objects.all(), user)
+        return gql_optimizer.query(
+            Comment.objects.filter(ticket_id__in=allowed_tickets.values("id")),
+            info,
+        )
+
+    def resolve_grievance_location_scope(self, info, **kwargs):
+        if not info.context.user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
+            raise PermissionDenied(_("unauthorized"))
+        return build_grievance_location_scope(info.context.user)
+
+    def resolve_grievance_locations(
+        self,
+        info,
+        location_type,
+        parent_id=None,
+        search=None,
+        **kwargs,
+    ):
+        if not info.context.user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
+            raise PermissionDenied(_("unauthorized"))
+        return grievance_locations_for_user(
+            info.context.user,
+            location_type,
+            parent_id=parent_id,
+            search=search,
+        )
 
     def resolve_ticket_details(self, info, **kwargs):
-        if not info.context.user.has_perms(TicketConfig.gql_query_tickets_perms):
+        if not info.context.user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
             raise PermissionDenied(_("unauthorized"))
+        queryset = Ticket.objects.filter(*append_validity_filter(**kwargs)).order_by(
+            "title"
+        )
         return gql_optimizer.query(
-            Ticket.objects.filter(*append_validity_filter(**kwargs))
-            .all()
-            .order_by(
-                "ticket_title",
-            ),
+            annotate_ticket_metrics(Ticket.get_queryset(queryset, info.context.user)),
             info,
         )
 
@@ -102,7 +146,9 @@ class Query(graphene.ObjectType):
         Extra steps to perform when Scheme is queried
         """
         # Check if user has permission
-        if not info.context.user.has_perms(TicketConfig.gql_query_tickets_perms):
+        if not info.context.user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
             raise PermissionDenied(_("unauthorized"))
         filters = []
         model = Ticket
@@ -113,15 +159,49 @@ class Query(graphene.ObjectType):
                 Q(mutations__mutation__client_mutation_id=client_mutation_id)
             )
 
+        location_id = next(
+            (
+                kwargs.get(field)
+                for field in (
+                    "village_id",
+                    "ward_id",
+                    "district_id",
+                    "region_id",
+                    "location_id",
+                )
+                if kwargs.get(field)
+            ),
+            None,
+        )
+        if location_id:
+            filters.append(Q(event_location_id__in=location_subtree_ids(location_id)))
+
         # Used to specify if user want to see all records including invalid records as history
         show_history = kwargs.get("show_history", False)
         ticket_version = kwargs.get("ticket_version", False)
+        overdue = kwargs.get("overdue")
         if show_history or ticket_version:
             if ticket_version:
                 filters.append(Q(version=ticket_version))
-            query = model.history.filter(*filters).all().as_instances()
+            history_query = model.history.filter(*filters).all()
+            history_query = ticket_queryset_for_user(
+                history_query,
+                info.context.user,
+            )
+            history_query = annotate_ticket_metrics(history_query)
+            if overdue is not None:
+                history_query = history_query.filter(
+                    _overdue_sort=1 if overdue else 0
+                )
+            query = history_query.as_instances()
         else:
-            query = model.objects.filter(*filters, is_deleted=False).all()
+            query = model.get_queryset(
+                model.objects.filter(*filters, is_deleted=False).all(),
+                info.context.user,
+            )
+            query = annotate_ticket_metrics(query)
+            if overdue is not None:
+                query = query.filter(_overdue_sort=1 if overdue else 0)
 
         return gql_optimizer.query(query, info)
 
@@ -130,7 +210,9 @@ class Query(graphene.ObjectType):
         Extra steps to perform when Scheme is queried
         """
         # Check if user has permission
-        if not info.context.user.has_perms(TicketConfig.gql_query_tickets_perms):
+        if not info.context.user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
             raise PermissionDenied(_("unauthorized"))
         filters = []
 
@@ -149,7 +231,11 @@ class Query(graphene.ObjectType):
         # if str is not None:
         #     filters += [Q(code__icontains=str) | Q(name__icontains=str)]
 
-        return gql_optimizer.query(Ticket.objects.filter(*filters).all(), info)
+        query = Ticket.get_queryset(
+            Ticket.objects.filter(*filters).all(),
+            info.context.user,
+        )
+        return gql_optimizer.query(annotate_ticket_metrics(query), info)
 
     # def resolve_claim_attachments(self, info, **kwargs):
     #     if not info.context.user.has_perms(TicketConfig.gql_query_tickets_perms):
@@ -159,13 +245,17 @@ class Query(graphene.ObjectType):
         user = info.context.user
         if type(user) is AnonymousUser:
             raise PermissionDenied(_("unauthorized"))
-        if not info.context.user.has_perms(TicketConfig.gql_query_tickets_perms):
+        if not info.context.user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
             raise PermissionDenied(_("unauthorized"))
         return GrievanceTypeConfigurationGQLType()
 
     def resolve_grievance_types(self, info, category_id=None, is_active=None, **kwargs):
         user = info.context.user
-        if not user.has_perms(TicketConfig.gql_query_tickets_perms):
+        if not user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
             raise PermissionDenied(_("unauthorized"))
         qs = GrievanceType.objects.select_related("category").all()
         if category_id:
@@ -177,7 +267,9 @@ class Query(graphene.ObjectType):
 
     def resolve_grievance_categories(self, info, is_active=None, **kwargs):
         user = info.context.user
-        if not user.has_perms(TicketConfig.gql_query_tickets_perms):
+        if not user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
             raise PermissionDenied(_("unauthorized"))
         qs = GrievanceCategory.objects.all()
         if is_active is not None:
@@ -185,15 +277,26 @@ class Query(graphene.ObjectType):
         return qs
 
     def resolve_ticket_attachments(self, info, **kwargs):
-        if not info.context.user.has_perms(TicketConfig.gql_query_tickets_perms):
+        if not info.context.user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
             raise PermissionDenied(_("unauthorized"))
         from core.utils import filter_validity
-        qs = TicketAttachment.objects.filter(*filter_validity())
+        allowed_tickets = Ticket.get_queryset(
+            Ticket.objects.all(),
+            info.context.user,
+        )
+        qs = TicketAttachment.objects.filter(
+            *filter_validity(),
+            ticket_id__in=allowed_tickets.values("id"),
+        )
         return gql_optimizer.query(qs, info)
 
     def resolve_grievance_channels(self, info, is_active=None, **kwargs):
         user = info.context.user
-        if not user.has_perms(TicketConfig.gql_query_tickets_perms):
+        if not user.has_perms(
+            TicketConfig.permissions("gql_query_tickets_perms")
+        ):
             raise PermissionDenied(_("unauthorized"))
         qs = GrievanceChannel.objects.all()
         if is_active is not None:

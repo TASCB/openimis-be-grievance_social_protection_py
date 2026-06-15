@@ -23,6 +23,10 @@ from grievance_social_protection.validations import (
     CommentValidation,
     validate_resolution,
 )
+from grievance_social_protection.location_scope import (
+    ensure_ticket_access,
+    normalize_ticket_location,
+)
 
 
 class TicketService(BaseService):
@@ -34,6 +38,7 @@ class TicketService(BaseService):
     @register_service_signal("ticket_service.create")
     def create(self, obj_data):
         self._get_content_type(obj_data)
+        normalize_ticket_location(self.user, obj_data)
         self._generate_code(obj_data)
         resolution_error = validate_resolution(obj_data)
         if resolution_error:
@@ -43,6 +48,9 @@ class TicketService(BaseService):
     @register_service_signal("ticket_service.update")
     def update(self, obj_data):
         self._get_content_type(obj_data)
+        ticket = Ticket.objects.filter(id=obj_data.get("id")).first()
+        ensure_ticket_access(self.user, ticket)
+        normalize_ticket_location(self.user, obj_data, existing_ticket=ticket)
         resolution_error = validate_resolution(obj_data)
         if resolution_error:
             raise ValidationError(resolution_error)
@@ -61,6 +69,7 @@ class TicketService(BaseService):
                 ticket = Ticket.objects.filter(id=ticket_id).first()
                 if not ticket:
                     raise ValidationError("Ticket not found")
+                ensure_ticket_access(self.user, ticket)
 
                 ticket_update_data = {
                     key: value
@@ -79,6 +88,26 @@ class TicketService(BaseService):
                         "resolution",
                     }
                 }
+                location_input = {
+                    key: obj_data[key]
+                    for key in (
+                        "event_location_id",
+                        "region_id",
+                        "district_id",
+                        "ward_id",
+                        "village_id",
+                    )
+                    if key in obj_data
+                }
+                if location_input:
+                    normalize_ticket_location(
+                        self.user,
+                        location_input,
+                        existing_ticket=ticket,
+                    )
+                    ticket_update_data["event_location_id"] = location_input[
+                        "event_location_id"
+                    ]
 
                 resolution_error = validate_resolution(ticket_update_data)
                 if resolution_error:
@@ -139,6 +168,7 @@ class TicketService(BaseService):
                 self.validation_class.validate_update(self.user, **obj_data)
                 ticket_id = obj_data.get("id")
                 ticket = Ticket.objects.filter(id=ticket_id).first()
+                ensure_ticket_access(self.user, ticket)
                 ticket.status = Ticket.TicketStatus.OPEN
                 self._check_if_comment_resolution(ticket_id)
                 ticket.save(username=self.user.username)

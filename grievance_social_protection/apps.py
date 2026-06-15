@@ -22,7 +22,7 @@ DEFAULT_CFG = {
     "tickets_attachments_root_path": None,
     "grievance_types": [DEFAULT_STRING, "Category A", "Category B"],
     "grievance_flags": [DEFAULT_STRING, "Flag A", "Flag B"],
-    "grievance_channels": [DEFAULT_STRING, "Channel A", "Channel B"],
+    "grievance_channels": ["Web", "App", "USSD"],
     "default_responses": {DEFAULT_STRING: DEFAULT_STRING},
     "grievance_anonymized_fields": {DEFAULT_STRING: []},
     # CRON timedelta: {days},{hours}
@@ -58,6 +58,10 @@ class TicketConfig(AppConfig):
     default_resolution = {}
     attending_staff_role_ids = []
     default_attending_staff_role_ids = {}
+
+    @classmethod
+    def permissions(cls, field):
+        return getattr(cls, field, None) or DEFAULT_CFG[field]
 
     def ready(self):
         from core.models import ModuleConfiguration

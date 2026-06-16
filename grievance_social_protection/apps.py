@@ -22,7 +22,7 @@ DEFAULT_CFG = {
     "tickets_attachments_root_path": None,
     "grievance_types": [DEFAULT_STRING, "Category A", "Category B"],
     "grievance_flags": [DEFAULT_STRING, "Flag A", "Flag B"],
-    "grievance_channels": ["Web", "App", "USSD"],
+    "grievance_channels": ["Web", "USSD", "Mobile App", "Call Center"],
     "default_responses": {DEFAULT_STRING: DEFAULT_STRING},
     "grievance_anonymized_fields": {DEFAULT_STRING: []},
     # CRON timedelta: {days},{hours}

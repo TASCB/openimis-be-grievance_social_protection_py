@@ -45,6 +45,18 @@ REPORT_RESOLUTION_STATUS = "RESOLUTION_STATUS"
 REPORT_CLOSURE_TIMELINE = "CLOSURE_TIMELINE"
 REPORT_CLOSURE_TIMELINE_BY_PAA = "CLOSURE_TIMELINE_BY_PAA"
 REPORT_OVERDUE_BY_PAA = "OVERDUE_BY_PAA"
+CATEGORY_REPORT_LAST_CATEGORY = "Maswali na Maoni"
+
+PAA_GRIEVANCE_FILTER_WITHOUT = "WITHOUT_GRIEVANCE"
+PAA_GRIEVANCE_FILTER_WITH = "WITH_GRIEVANCE"
+PAA_GRIEVANCE_FILTER_LESS_THAN = "LESS_THAN"
+PAA_GRIEVANCE_FILTER_MORE_THAN = "MORE_THAN"
+PAA_GRIEVANCE_FILTERS = {
+    PAA_GRIEVANCE_FILTER_WITHOUT,
+    PAA_GRIEVANCE_FILTER_WITH,
+    PAA_GRIEVANCE_FILTER_LESS_THAN,
+    PAA_GRIEVANCE_FILTER_MORE_THAN,
+}
 
 CLOSED_STATUSES = [
     Ticket.TicketStatus.CLOSED,
@@ -418,24 +430,11 @@ def _agent_name(ticket):
     return getattr(user, "username", None) or str(user)
 
 
-def _resolution_status(status):
-    status_labels = {
-        Ticket.TicketStatus.RECEIVED: _("Received"),
-        Ticket.TicketStatus.OPEN: _("Open"),
-        Ticket.TicketStatus.CLOSED: _("Closed"),
-        Ticket.TicketStatus.IN_PROGRESS: _("In Progress"),
-        Ticket.TicketStatus.RESOLVED: _("Resolved"),
-    }
-    return status_labels.get(status, status or _("Unspecified"))
-
-
 def _resolution_status_names():
     return [
         _clean_dimension_name(_("Received")),
-        _clean_dimension_name(_("Open")),
+        _clean_dimension_name(_("Unresolved")),
         _clean_dimension_name(_("Closed")),
-        _clean_dimension_name(_("In Progress")),
-        _clean_dimension_name(_("Resolved")),
     ]
 
 
@@ -533,7 +532,12 @@ def _category_rows(tickets):
         GrievanceCategory,
         TicketConfig.grievance_types,
     )
-    return _dimension_rows(REPORT_CATEGORY, configured_names, counters, "category")
+    rows = _dimension_rows(REPORT_CATEGORY, configured_names, counters, "category")
+    last_category = CATEGORY_REPORT_LAST_CATEGORY.casefold()
+    return sorted(
+        rows,
+        key=lambda row: _clean_dimension_name(row.category).casefold() == last_category,
+    )
 
 
 def _channel_rows(tickets):
@@ -546,10 +550,16 @@ def _channel_rows(tickets):
 
 
 def _resolution_status_rows(tickets):
-    counters = _aggregate_counts(tickets, lambda ticket: _resolution_status(ticket.status))
+    status_names = _resolution_status_names()
+    received, unresolved, closed = status_names
+    counters = {
+        received: len(tickets),
+        unresolved: sum(ticket.status in OPEN_STATUSES for ticket in tickets),
+        closed: sum(ticket.status in CLOSED_STATUSES for ticket in tickets),
+    }
     return _dimension_rows(
         REPORT_RESOLUTION_STATUS,
-        _resolution_status_names(),
+        status_names,
         counters,
         "status",
     )
@@ -638,7 +648,38 @@ def _paa_metric_rows(report, counters, user, paa_id=None):
     return rows
 
 
-def _paa_grievance_count_rows(tickets, user, paa_id=None):
+def _filter_paa_grievance_count_rows(
+    rows,
+    paa_grievance_filter=None,
+    grievance_count=None,
+):
+    count_filter = (
+        paa_grievance_filter or PAA_GRIEVANCE_FILTER_WITHOUT
+    ).upper()
+    if count_filter not in PAA_GRIEVANCE_FILTERS:
+        raise ValueError(f"Unsupported PAA grievance filter: {count_filter}")
+
+    threshold = grievance_count if grievance_count is not None else 0
+    if threshold < 0:
+        raise ValueError("Grievance count must be zero or greater")
+
+    predicates = {
+        PAA_GRIEVANCE_FILTER_WITHOUT: lambda count: count == 0,
+        PAA_GRIEVANCE_FILTER_WITH: lambda count: count > 0,
+        PAA_GRIEVANCE_FILTER_LESS_THAN: lambda count: count < threshold,
+        PAA_GRIEVANCE_FILTER_MORE_THAN: lambda count: count > threshold,
+    }
+    predicate = predicates[count_filter]
+    return [row for row in rows if predicate(row.count or 0)]
+
+
+def _paa_grievance_count_rows(
+    tickets,
+    user,
+    paa_id=None,
+    paa_grievance_filter=None,
+    grievance_count=None,
+):
     counters = {}
     for ticket in tickets:
         ticket_paa_id, ticket_paa_name = _ticket_paa(ticket)
@@ -651,7 +692,17 @@ def _paa_grievance_count_rows(tickets, user, paa_id=None):
             },
         )
         current["count"] += 1
-    return _paa_metric_rows(REPORT_PAA_WITHOUT_GRIEVANCES, counters, user, paa_id)
+    rows = _paa_metric_rows(
+        REPORT_PAA_WITHOUT_GRIEVANCES,
+        counters,
+        user,
+        paa_id,
+    )
+    return _filter_paa_grievance_count_rows(
+        rows,
+        paa_grievance_filter,
+        grievance_count,
+    )
 
 
 def _overdue_by_paa_rows(tickets, user, paa_id=None):
@@ -714,6 +765,8 @@ def resolve_grievance_report_rows(
     date_to=None,
     agent_id=None,
     paa_id=None,
+    paa_grievance_filter=None,
+    grievance_count=None,
 ):
     check_ticket_perms(info)
     tickets = list(
@@ -725,7 +778,13 @@ def resolve_grievance_report_rows(
     if report == REPORT_CATEGORY:
         return _category_rows(tickets)
     if report == REPORT_PAA_WITHOUT_GRIEVANCES:
-        return _paa_grievance_count_rows(tickets, info.context.user, paa_id)
+        return _paa_grievance_count_rows(
+            tickets,
+            info.context.user,
+            paa_id,
+            paa_grievance_filter,
+            grievance_count,
+        )
     if report == REPORT_CHANNEL:
         return _channel_rows(tickets)
     if report == REPORT_RESOLUTION_STATUS:

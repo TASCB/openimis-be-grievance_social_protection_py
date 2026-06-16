@@ -85,7 +85,12 @@ class Query(graphene.ObjectType):
         date_to=graphene.Date(),
         agent_id=graphene.String(),
         paa_id=graphene.String(),
-        description="Aggregated grievance reports with optional date, agent, and PAA filters",
+        paa_grievance_filter=graphene.String(),
+        grievance_count=graphene.Int(),
+        description=(
+            "Aggregated grievance reports with optional date, agent, PAA, "
+            "and PAA grievance-count filters"
+        ),
     )
 
     def resolve_comments(self, info, **kwargs):

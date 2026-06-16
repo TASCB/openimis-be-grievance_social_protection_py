@@ -1,4 +1,6 @@
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.utils import timezone
 from graphene import Schema
@@ -114,6 +116,31 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
         self.assertEqual(rows["Report Category With Ticket"], 1)
         self.assertEqual(rows["Report Category Without Ticket"], 0)
 
+    def test_category_report_lists_maswali_na_maoni_last(self):
+        self._create_category("A Report Category")
+        self._create_category("Maswali na Maoni")
+        self._create_category("Z Report Category")
+        self._create_ticket("ZZ Ticket-only Category")
+        today = _today().isoformat()
+
+        response = self.gql_client.execute(
+            f"""
+            query {{
+              grievanceReports(report: "CATEGORY", dateFrom: "{today}", dateTo: "{today}") {{
+                category
+              }}
+            }}
+            """,
+            context=self.gql_context.get_request(),
+        )
+
+        self.assertNotIn("errors", response)
+        categories = [
+            row["category"] for row in response["data"]["grievanceReports"]
+        ]
+        self.assertIn("Maswali na Maoni", categories)
+        self.assertEqual(categories[-1], "Maswali na Maoni")
+
     def test_channel_report_includes_configured_channels_without_tickets(self):
         self._create_channel("Report Channel With Ticket")
         self._create_channel("Report Channel Without Ticket")
@@ -137,7 +164,7 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
         self.assertEqual(rows["Report Channel With Ticket"], 1)
         self.assertEqual(rows["Report Channel Without Ticket"], 0)
 
-    def test_resolution_status_report_counts_each_status(self):
+    def test_resolution_status_report_summarizes_status_groups(self):
         self._create_ticket("Report Status Received")
         self._create_ticket("Report Status Open", status=Ticket.TicketStatus.OPEN)
         self._create_ticket("Report Status Closed", status=Ticket.TicketStatus.CLOSED)
@@ -162,14 +189,17 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
         )
 
         self.assertNotIn("errors", response)
-        rows = {row["status"]: row["count"] for row in response["data"]["grievanceReports"]}
-        self.assertEqual(rows["Received"], 1)
-        self.assertEqual(rows["Open"], 1)
-        self.assertEqual(rows["Closed"], 1)
-        self.assertEqual(rows["In Progress"], 1)
-        self.assertEqual(rows["Resolved"], 1)
+        report_rows = response["data"]["grievanceReports"]
+        self.assertEqual(
+            [row["status"] for row in report_rows],
+            ["Received", "Unresolved", "Closed"],
+        )
+        rows = {row["status"]: row["count"] for row in report_rows}
+        self.assertEqual(rows["Received"], 5)
+        self.assertEqual(rows["Unresolved"], 3)
+        self.assertEqual(rows["Closed"], 2)
 
-    def test_resolution_status_report_includes_missing_statuses_with_zero(self):
+    def test_resolution_status_report_handles_only_received_grievances(self):
         self._create_ticket("Report Status Only Received")
         today = _today().isoformat()
 
@@ -190,12 +220,86 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
         )
 
         self.assertNotIn("errors", response)
-        rows = {row["status"]: row["count"] for row in response["data"]["grievanceReports"]}
+        report_rows = response["data"]["grievanceReports"]
+        self.assertEqual(
+            [row["status"] for row in report_rows],
+            ["Received", "Unresolved", "Closed"],
+        )
+        rows = {row["status"]: row["count"] for row in report_rows}
         self.assertEqual(rows["Received"], 1)
-        self.assertEqual(rows["Open"], 0)
+        self.assertEqual(rows["Unresolved"], 1)
         self.assertEqual(rows["Closed"], 0)
-        self.assertEqual(rows["In Progress"], 0)
-        self.assertEqual(rows["Resolved"], 0)
+
+    def test_paa_report_filters_by_grievance_count(self):
+        tickets = [self._create_ticket("PAA One")]
+        tickets.extend(self._create_ticket("PAA Three") for _ in range(3))
+
+        paa_locations = [
+            SimpleNamespace(uuid="paa-zero", name="PAA Zero"),
+            SimpleNamespace(uuid="paa-one", name="PAA One"),
+            SimpleNamespace(uuid="paa-three", name="PAA Three"),
+        ]
+
+        def ticket_paa(ticket):
+            paa_by_category = {
+                "PAA One": ("paa-one", "PAA One"),
+                "PAA Three": ("paa-three", "PAA Three"),
+            }
+            return paa_by_category[ticket.category]
+
+        def report_rows(count_filter, grievance_count=None):
+            count_argument = (
+                f", grievanceCount: {grievance_count}"
+                if grievance_count is not None
+                else ""
+            )
+            response = self.gql_client.execute(
+                f"""
+                query {{
+                  grievanceReports(
+                    report: "PAA_WITHOUT_GRIEVANCES",
+                    paaGrievanceFilter: "{count_filter}"
+                    {count_argument}
+                  ) {{
+                    paaName
+                    count
+                  }}
+                }}
+                """,
+                context=self.gql_context.get_request(),
+            )
+            self.assertNotIn("errors", response)
+            return {
+                row["paaName"]: row["count"]
+                for row in response["data"]["grievanceReports"]
+            }
+
+        with patch(
+            "grievance_social_protection.gql_queries._ticket_base_queryset",
+            return_value=tickets,
+        ), patch(
+            "grievance_social_protection.gql_queries._paa_candidates",
+            return_value=paa_locations,
+        ), patch(
+            "grievance_social_protection.gql_queries._ticket_paa",
+            side_effect=ticket_paa,
+        ):
+            self.assertEqual(
+                report_rows("WITHOUT_GRIEVANCE"),
+                {"PAA Zero": 0},
+            )
+            self.assertEqual(
+                report_rows("WITH_GRIEVANCE"),
+                {"PAA One": 1, "PAA Three": 3},
+            )
+            self.assertEqual(
+                report_rows("LESS_THAN", 2),
+                {"PAA Zero": 0, "PAA One": 1},
+            )
+            self.assertEqual(
+                report_rows("MORE_THAN", 1),
+                {"PAA Three": 3},
+            )
 
     def test_overdue_by_paa_report_handles_naive_current_datetime(self):
         today = _today()

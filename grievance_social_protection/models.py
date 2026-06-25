@@ -29,7 +29,7 @@ class Ticket(HistoryBusinessModel):
 
     key = models.TextField(null=True, blank=True)
     title = models.CharField(max_length=255, blank=True, null=True)
-    description = models.TextField(max_length=255, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
     code = models.CharField(max_length=16, unique=True, blank=True, null=True)
 
     reporter_type = models.ForeignKey(
@@ -54,11 +54,40 @@ class Ticket(HistoryBusinessModel):
     flags = models.CharField(max_length=255, blank=True, null=True)
     channel = models.CharField(max_length=255, blank=True, null=True)
     resolution = models.CharField(max_length=255, blank=True, null=True)
+    consent_given = models.BooleanField(default=False)
     event_location = models.ForeignKey(
         "location.Location",
         models.DO_NOTHING,
         db_column="EventLocationId",
         related_name="grievance_tickets",
+        blank=True,
+        null=True,
+    )
+    external_reporter_first_name = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+    )
+    external_reporter_last_name = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+    )
+    external_reporter_phone = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+    )
+    external_reporter_email = models.EmailField(
+        max_length=254,
+        blank=True,
+        null=True,
+    )
+    external_reporter_location = models.ForeignKey(
+        "location.Location",
+        models.DO_NOTHING,
+        db_column="ExternalReporterLocationId",
+        related_name="external_reporter_grievance_tickets",
         blank=True,
         null=True,
     )

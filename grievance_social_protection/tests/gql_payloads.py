@@ -3,6 +3,7 @@ mutation createTicket {
   createTicket(input: {
     category: "%s",
     title: "%s",
+    description: "%s",
     resolution: "%s",
     priority: "%s",
     dateOfIncident: "%s",

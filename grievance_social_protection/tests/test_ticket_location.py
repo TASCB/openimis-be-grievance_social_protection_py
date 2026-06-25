@@ -66,15 +66,15 @@ class TicketLocationTest(TestCase):
         ticket.save(user=user or self.unassigned_user)
         return ticket
 
-    def test_unassigned_user_can_create_without_location(self):
+    def test_unassigned_user_cannot_create_without_location(self):
         payload = deepcopy(service_add_ticket_payload)
-        result = TicketService(self.unassigned_user).create(payload)
 
-        self.assertTrue(result["success"], result)
-        ticket = Ticket.objects.get(uuid=result["data"]["uuid"])
-        self.assertIsNone(ticket.event_location_id)
+        with self.assertRaises(ValidationError) as context:
+            TicketService(self.unassigned_user).create(payload)
 
-    def test_unassigned_user_can_create_with_selected_village(self):
+        self.assertIn("Current user has no assigned location", str(context.exception))
+
+    def test_unassigned_user_cannot_create_with_selected_village(self):
         payload = {
             **deepcopy(service_add_ticket_payload),
             "region_id": self.region_a.id,
@@ -83,11 +83,11 @@ class TicketLocationTest(TestCase):
             "village_id": self.village_a.id,
             "event_location_id": self.village_a.id,
         }
-        result = TicketService(self.unassigned_user).create(payload)
 
-        self.assertTrue(result["success"], result)
-        ticket = Ticket.objects.get(uuid=result["data"]["uuid"])
-        self.assertEqual(ticket.event_location, self.village_a)
+        with self.assertRaises(ValidationError) as context:
+            TicketService(self.unassigned_user).create(payload)
+
+        self.assertIn("Current user has no assigned location", str(context.exception))
 
     def test_invalid_location_hierarchy_is_rejected(self):
         payload = {
@@ -112,6 +112,14 @@ class TicketLocationTest(TestCase):
         ticket = Ticket.objects.get(uuid=result["data"]["uuid"])
         self.assertEqual(ticket.event_location, self.village_a)
 
+    def test_district_assignment_is_applied_when_no_location_is_submitted(self):
+        payload = deepcopy(service_add_ticket_payload)
+        result = TicketService(self.district_user).create(payload)
+
+        self.assertTrue(result["success"], result)
+        ticket = Ticket.objects.get(uuid=result["data"]["uuid"])
+        self.assertEqual(ticket.event_location, self.district_a)
+
     def test_assigned_user_cannot_create_outside_scope(self):
         payload = {
             **deepcopy(service_add_ticket_payload),
@@ -130,6 +138,15 @@ class TicketLocationTest(TestCase):
         visible = ticket_queryset_for_user(Ticket.objects.all(), self.village_user)
 
         self.assertEqual(list(visible), [allowed])
+
+    def test_unassigned_user_does_not_see_grievances_when_row_security_is_enabled(self):
+        self._ticket("Allowed grievance", self.village_a)
+        self._ticket("Outside grievance", self.village_b)
+        self._ticket("Locationless grievance", None)
+
+        visible = ticket_queryset_for_user(Ticket.objects.all(), self.unassigned_user)
+
+        self.assertFalse(visible.exists())
 
     def test_district_user_can_edit_to_an_allowed_descendant(self):
         ticket = self._ticket("Editable grievance", self.district_a)

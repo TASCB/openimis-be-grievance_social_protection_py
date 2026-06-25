@@ -358,6 +358,10 @@ def _ticket_base_queryset(user, date_from=None, date_to=None, agent_id=None):
         "event_location__parent",
         "event_location__parent__parent",
         "event_location__parent__parent__parent",
+        "external_reporter_location",
+        "external_reporter_location__parent",
+        "external_reporter_location__parent__parent",
+        "external_reporter_location__parent__parent__parent",
     )
     queryset = ticket_queryset_for_user(queryset, user)
     queryset = annotate_ticket_metrics(queryset)
@@ -389,6 +393,8 @@ def _location_name(location):
 def _reporter_location(ticket):
     if ticket.event_location:
         return ticket.event_location
+    if ticket.external_reporter_location:
+        return ticket.external_reporter_location
     reporter = ticket.reporter
     if not reporter:
         return None
@@ -815,6 +821,11 @@ class TicketGQLType(DjangoObjectType):
     district = graphene.Field(LocationGQLType)
     ward = graphene.Field(LocationGQLType)
     village = graphene.Field(LocationGQLType)
+    external_reporter_location = graphene.Field(LocationGQLType)
+    external_reporter_region = graphene.Field(LocationGQLType)
+    external_reporter_district = graphene.Field(LocationGQLType)
+    external_reporter_ward = graphene.Field(LocationGQLType)
+    external_reporter_village = graphene.Field(LocationGQLType)
     expected_resolution_date = graphene.Date()
     closed_at = graphene.DateTime()
     overdue = graphene.Boolean()
@@ -825,6 +836,11 @@ class TicketGQLType(DjangoObjectType):
     def _resolve_location_type(root, info, location_type):
         check_ticket_perms(info)
         return location_chain(root.event_location).get(location_type)
+
+    @staticmethod
+    def _resolve_external_reporter_location_type(root, info, location_type):
+        check_ticket_perms(info)
+        return location_chain(root.external_reporter_location).get(location_type)
 
     @staticmethod
     def resolve_event_location(root, info):
@@ -846,6 +862,27 @@ class TicketGQLType(DjangoObjectType):
     @staticmethod
     def resolve_village(root, info):
         return TicketGQLType._resolve_location_type(root, info, "V")
+
+    @staticmethod
+    def resolve_external_reporter_location(root, info):
+        check_ticket_perms(info)
+        return root.external_reporter_location
+
+    @staticmethod
+    def resolve_external_reporter_region(root, info):
+        return TicketGQLType._resolve_external_reporter_location_type(root, info, "R")
+
+    @staticmethod
+    def resolve_external_reporter_district(root, info):
+        return TicketGQLType._resolve_external_reporter_location_type(root, info, "D")
+
+    @staticmethod
+    def resolve_external_reporter_ward(root, info):
+        return TicketGQLType._resolve_external_reporter_location_type(root, info, "W")
+
+    @staticmethod
+    def resolve_external_reporter_village(root, info):
+        return TicketGQLType._resolve_external_reporter_location_type(root, info, "V")
 
     @staticmethod
     def resolve_expected_resolution_date(root, info):
@@ -880,6 +917,8 @@ class TicketGQLType(DjangoObjectType):
     @staticmethod
     def resolve_reporter_type_name(root, info):
         check_ticket_perms(info)
+        if root.external_reporter_first_name or root.external_reporter_last_name:
+            return "external"
         return root.reporter_type.name if root.reporter_type else None
 
     @staticmethod
@@ -895,6 +934,8 @@ class TicketGQLType(DjangoObjectType):
     @staticmethod
     def resolve_reporter_first_name(root, info):
         check_ticket_perms(info)
+        if root.external_reporter_first_name:
+            return root.external_reporter_first_name
         if root.reporter_type:
             content_type = ContentType.objects.get_for_model(
                 root.reporter_type.model_class()
@@ -915,6 +956,8 @@ class TicketGQLType(DjangoObjectType):
     @staticmethod
     def resolve_reporter_last_name(root, info):
         check_ticket_perms(info)
+        if root.external_reporter_last_name:
+            return root.external_reporter_last_name
         if root.reporter_type:
             content_type = ContentType.objects.get_for_model(
                 root.reporter_type.model_class()
@@ -967,12 +1010,18 @@ class TicketGQLType(DjangoObjectType):
             "category": ["exact", "istartswith", "icontains", "iexact"],
             "flags": ["exact", "istartswith", "icontains", "iexact"],
             "channel": ["exact", "istartswith", "icontains", "iexact"],
+            "consent_given": ["exact"],
             "resolution": ["exact", "istartswith", "icontains", "iexact"],
             "reporter_id": ["exact"],
             "due_date": ["exact", "istartswith", "icontains", "iexact"],
             "date_of_incident": ["exact", "istartswith", "icontains", "iexact"],
             "date_created": ["exact", "istartswith", "icontains", "iexact"],
             "event_location": ["exact", "isnull"],
+            "external_reporter_first_name": ["exact", "istartswith", "icontains", "iexact"],
+            "external_reporter_last_name": ["exact", "istartswith", "icontains", "iexact"],
+            "external_reporter_phone": ["exact", "istartswith", "icontains", "iexact"],
+            "external_reporter_email": ["exact", "istartswith", "icontains", "iexact"],
+            "external_reporter_location": ["exact", "isnull"],
             **prefix_filterset("attending_staff__", UserGQLType._meta.filter_fields),
         }
 

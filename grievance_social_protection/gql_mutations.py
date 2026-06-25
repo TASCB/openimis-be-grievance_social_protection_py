@@ -81,6 +81,7 @@ class CreateTicketInputType(OpenIMISMutation.Input):
     category = graphene.String(required=True)
     flags = graphene.String(required=False)
     channel = graphene.String(required=False)
+    consent_given = graphene.Boolean(required=False)
     json_ext = graphene.types.json.JSONString(required=False)
     resolution = graphene.String(required=False)
     event_location_id = graphene.Int(required=False)
@@ -88,6 +89,15 @@ class CreateTicketInputType(OpenIMISMutation.Input):
     district_id = graphene.Int(required=False)
     ward_id = graphene.Int(required=False)
     village_id = graphene.Int(required=False)
+    external_reporter_first_name = graphene.String(required=False)
+    external_reporter_last_name = graphene.String(required=False)
+    external_reporter_phone = graphene.String(required=False)
+    external_reporter_email = graphene.String(required=False)
+    external_reporter_location_id = graphene.Int(required=False)
+    external_reporter_region_id = graphene.Int(required=False)
+    external_reporter_district_id = graphene.Int(required=False)
+    external_reporter_ward_id = graphene.Int(required=False)
+    external_reporter_village_id = graphene.Int(required=False)
 
 
 class UpdateTicketInputType(CreateTicketInputType):
@@ -156,6 +166,8 @@ class CreateTicketMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
 
         service = TicketService(user)
         response = service.create(data)
+        if not response["success"]:
+            return response
         if client_mutation_id:
             ticket_id = response["data"]["id"]
             ticket = Ticket.objects.get(id=ticket_id)
@@ -163,8 +175,6 @@ class CreateTicketMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
                 user, client_mutation_id=client_mutation_id, ticket=ticket
             )
 
-        if not response["success"]:
-            return response
         return None
 
     class Input(CreateTicketInputType):
@@ -202,14 +212,14 @@ class UpdateTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
 
         service = TicketService(user)
         response = service.update(data)
+        if not response["success"]:
+            return response
         if client_mutation_id:
             ticket_id = response["data"]["id"]
             ticket = Ticket.objects.get(id=ticket_id)
             TicketMutation.object_mutated(
                 user, client_mutation_id=client_mutation_id, ticket=ticket
             )
-        if not response["success"]:
-            return response
         return None
 
     class Input(UpdateTicketInputType):

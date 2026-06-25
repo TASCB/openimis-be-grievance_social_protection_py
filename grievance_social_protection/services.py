@@ -21,23 +21,41 @@ from grievance_social_protection.models import (
 from grievance_social_protection.validations import (
     TicketValidation,
     CommentValidation,
+    is_external_reporter_type,
+    validate_external_reporter,
     validate_resolution,
 )
 from grievance_social_protection.location_scope import (
     ensure_ticket_access,
+    normalize_external_reporter_location,
     normalize_ticket_location,
 )
 
 
 class TicketService(BaseService):
     OBJECT_TYPE = Ticket
+    EXTERNAL_REPORTER_FIELDS = {
+        "external_reporter_first_name",
+        "external_reporter_last_name",
+        "external_reporter_phone",
+        "external_reporter_email",
+        "external_reporter_location_id",
+    }
+    EXTERNAL_REPORTER_LOCATION_INPUT_FIELDS = {
+        "external_reporter_region_id",
+        "external_reporter_district_id",
+        "external_reporter_ward_id",
+        "external_reporter_village_id",
+    }
 
     def __init__(self, user, validation_class=TicketValidation):
         super().__init__(user, validation_class)
 
     @register_service_signal("ticket_service.create")
     def create(self, obj_data):
-        self._get_content_type(obj_data)
+        if obj_data.get("consent_given") is None:
+            obj_data["consent_given"] = False
+        self._normalize_reporter(obj_data)
         normalize_ticket_location(self.user, obj_data)
         self._generate_code(obj_data)
         resolution_error = validate_resolution(obj_data)
@@ -47,7 +65,7 @@ class TicketService(BaseService):
 
     @register_service_signal("ticket_service.update")
     def update(self, obj_data):
-        self._get_content_type(obj_data)
+        self._normalize_reporter(obj_data)
         ticket = Ticket.objects.filter(id=obj_data.get("id")).first()
         ensure_ticket_access(self.user, ticket)
         normalize_ticket_location(self.user, obj_data, existing_ticket=ticket)
@@ -77,7 +95,6 @@ class TicketService(BaseService):
                     if key
                     in {
                         "title",
-                        "description",
                         "attending_staff_id",
                         "date_of_incident",
                         "priority",
@@ -194,12 +211,45 @@ class TicketService(BaseService):
             comment.is_resolution = False
             comment.save(username=self.user.username)
 
-    def _get_content_type(self, obj_data):
-        if "reporter_type" in obj_data:
-            content_type = ContentType.objects.get(
-                model=obj_data["reporter_type"].lower()
-            )
-            obj_data["reporter_type"] = content_type
+    def _normalize_reporter(self, obj_data):
+        if "reporter_type" not in obj_data:
+            return
+
+        reporter_type = obj_data.get("reporter_type")
+        if is_external_reporter_type(reporter_type):
+            obj_data["reporter_type"] = None
+            obj_data["reporter_id"] = None
+            self._clean_external_reporter_strings(obj_data)
+            validate_external_reporter(obj_data)
+            normalize_external_reporter_location(obj_data, require_complete=True)
+            return
+
+        if not reporter_type:
+            obj_data["reporter_type"] = None
+            obj_data["reporter_id"] = None
+            self._clear_external_reporter(obj_data)
+            return
+
+        content_type = ContentType.objects.get(model=reporter_type.lower())
+        obj_data["reporter_type"] = content_type
+        self._clear_external_reporter(obj_data)
+
+    def _clear_external_reporter(self, obj_data):
+        for field in self.EXTERNAL_REPORTER_FIELDS:
+            obj_data[field] = None
+        for field in self.EXTERNAL_REPORTER_LOCATION_INPUT_FIELDS:
+            obj_data.pop(field, None)
+
+    @staticmethod
+    def _clean_external_reporter_strings(obj_data):
+        for field in (
+            "external_reporter_first_name",
+            "external_reporter_last_name",
+            "external_reporter_phone",
+            "external_reporter_email",
+        ):
+            if field in obj_data and obj_data[field] is not None:
+                obj_data[field] = str(obj_data[field]).strip() or None
 
     def _generate_code(self, obj_data):
         if not obj_data.get("code"):

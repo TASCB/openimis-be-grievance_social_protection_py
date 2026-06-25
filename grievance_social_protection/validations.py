@@ -1,12 +1,23 @@
 import re
 
 from django.core.exceptions import ValidationError
+from django.core.validators import EmailValidator
 from django.utils.translation import gettext as _
 from django.contrib.contenttypes.models import ContentType
 
 from core.models import User
 from core.validation import BaseModelValidation, ObjectExistsValidationMixin
 from grievance_social_protection.models import Ticket, Comment
+
+
+EXTERNAL_REPORTER_TYPES = {
+    "external",
+    "externalreporter",
+    "external_reporter",
+    "external reporter",
+}
+DESCRIPTION_MIN_WORDS = 45
+DESCRIPTION_MAX_WORDS = 150
 
 
 class TicketValidation(BaseModelValidation):
@@ -20,6 +31,10 @@ class TicketValidation(BaseModelValidation):
         for error in unique_code_errors:
             errors.append(ValidationError(error, code='unique_code_error'))
 
+        description_errors = validate_ticket_description_word_count(data)
+        for error in description_errors:
+            errors.append(ValidationError(error, code="description_word_count_error"))
+
         if errors:
             raise ValidationError(errors)
 
@@ -32,6 +47,14 @@ class TicketValidation(BaseModelValidation):
         unique_code_errors = validate_ticket_unique_code(data)
         for error in unique_code_errors:
             errors.append(ValidationError(error, code='unique_code_error'))
+
+        description_errors = validate_ticket_description_unchanged(data)
+        for error in description_errors:
+            errors.append(ValidationError(error, code="description_immutable_error"))
+
+        consent_errors = validate_ticket_consent_unchanged(data)
+        for error in consent_errors:
+            errors.append(ValidationError(error, code="consent_immutable_error"))
 
         if errors:
             raise ValidationError(errors)
@@ -148,6 +171,97 @@ def validate_ticket_unique_code(data):
     if ticket_queryset.exists():
         return [{"message": _("validations.TicketValidation.validate_ticket_unique_code") % {"code": code}}]
     return []
+
+
+def description_word_count(description):
+    return len(str(description or "").strip().split())
+
+
+def validate_ticket_description_word_count(data):
+    word_count = description_word_count(data.get("description"))
+    if word_count < DESCRIPTION_MIN_WORDS:
+        return [{"message": _("Description must contain at least 45 words.")}]
+    if word_count > DESCRIPTION_MAX_WORDS:
+        return [{"message": _("Description must not exceed 150 words.")}]
+    return []
+
+
+def validate_ticket_description_unchanged(data):
+    if "description" not in data or not data.get("id"):
+        return []
+
+    ticket = Ticket.objects.filter(id=data.get("id")).only("description").first()
+    if ticket is None:
+        return []
+
+    if (ticket.description or "") != (data.get("description") or ""):
+        return [{"message": _("Description cannot be changed after submission.")}]
+    return []
+
+
+def validate_ticket_consent_unchanged(data):
+    if "consent_given" not in data or not data.get("id"):
+        return []
+
+    ticket = Ticket.objects.filter(id=data.get("id")).only("consent_given").first()
+    if ticket is None:
+        return []
+
+    if data.get("consent_given") is None:
+        return [{"message": _("Consent cannot be changed after submission.")}]
+
+    if bool(ticket.consent_given) != bool(data.get("consent_given")):
+        return [{"message": _("Consent cannot be changed after submission.")}]
+    return []
+
+
+def is_external_reporter_type(reporter_type):
+    if reporter_type is None:
+        return False
+    return str(reporter_type).strip().lower().replace("-", " ") in EXTERNAL_REPORTER_TYPES
+
+
+def validate_external_reporter(data):
+    errors = []
+    required_fields = [
+        ("external_reporter_first_name", _("First Name is required")),
+        ("external_reporter_last_name", _("Last Name is required")),
+        ("external_reporter_phone", _("Phone Number is required")),
+    ]
+
+    for field, message in required_fields:
+        value = data.get(field)
+        if not str(value or "").strip():
+            errors.append({"message": message})
+
+    phone = str(data.get("external_reporter_phone") or "").strip()
+    if phone and not _is_usable_phone(phone):
+        errors.append({
+            "message": _(
+                "Phone Number must contain 7 to 15 digits and may include a leading +, spaces, hyphens, dots, or parentheses"
+            )
+        })
+
+    email = str(data.get("external_reporter_email") or "").strip()
+    if email:
+        try:
+            EmailValidator()(email)
+        except ValidationError:
+            errors.append({"message": _("Email Address must be a valid email address")})
+
+    if errors:
+        raise ValidationError(errors)
+
+
+def _is_usable_phone(phone):
+    if not re.match(r"^\+?[0-9][0-9\s().-]*$", phone):
+        return False
+    digits = re.sub(r"\D", "", phone)
+    if not 7 <= len(digits) <= 15:
+        return False
+    if len(set(digits)) == 1:
+        return False
+    return True
 
 
 def validate_reporter(data):

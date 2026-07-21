@@ -330,3 +330,148 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
         self.assertTrue(
             any(row["count"] >= 1 and row["overdueDays"] >= 3 for row in rows)
         )
+
+    def test_paa_summary_groups_grievances_by_region_and_district(self):
+        tickets = [
+            self._create_ticket("PAA Summary A"),
+            self._create_ticket("PAA Summary B"),
+            self._create_ticket("PAA Summary C"),
+        ]
+
+        with patch(
+            "grievance_social_protection.gql_queries._ticket_base_queryset",
+            return_value=tickets,
+        ), patch(
+            "grievance_social_protection.gql_queries._ticket_region_and_paa",
+            side_effect=[
+                ("Arusha", "arusha-cc", "Arusha CC"),
+                ("Arusha", "arusha-cc", "Arusha CC"),
+                ("Arusha", "karatu-dc", "Karatu DC"),
+            ],
+        ):
+            response = self.gql_client.execute(
+                """
+                query {
+                  grievanceReports(report: "PAA_SUMMARY") {
+                    regionName
+                    districtName
+                    grievancesFiled
+                  }
+                }
+                """,
+                context=self.gql_context.get_request(),
+            )
+
+        self.assertNotIn("errors", response)
+        self.assertEqual(
+            response["data"]["grievanceReports"],
+            [
+                {
+                    "regionName": "Arusha",
+                    "districtName": "Arusha CC",
+                    "grievancesFiled": 2,
+                },
+                {
+                    "regionName": "Arusha",
+                    "districtName": "Karatu DC",
+                    "grievancesFiled": 1,
+                },
+            ],
+        )
+
+    def test_status_by_category_uses_legacy_report_columns(self):
+        tickets = [
+            self._create_ticket("Legacy Status", status=Ticket.TicketStatus.RECEIVED),
+            self._create_ticket("Legacy Status", status=Ticket.TicketStatus.IN_PROGRESS),
+            self._create_ticket("Legacy Status", status=Ticket.TicketStatus.CLOSED),
+            self._create_ticket("Legacy Status", status=Ticket.TicketStatus.RESOLVED),
+        ]
+
+        with patch(
+            "grievance_social_protection.gql_queries._ticket_base_queryset",
+            return_value=tickets,
+        ):
+            response = self.gql_client.execute(
+                """
+                query {
+                  grievanceReports(report: "STATUS_BY_CATEGORY") {
+                    category
+                    grievancesFiled
+                    openCount
+                    assignedCount
+                    reassignedCount
+                    inProgressCount
+                    closedCount
+                    escalatedCount
+                  }
+                }
+                """,
+                context=self.gql_context.get_request(),
+            )
+
+        self.assertNotIn("errors", response)
+        row = next(
+            row
+            for row in response["data"]["grievanceReports"]
+            if row["category"] == "Legacy Status"
+        )
+        self.assertEqual(
+            row,
+            {
+                "category": "Legacy Status",
+                "grievancesFiled": 4,
+                "openCount": 1,
+                "assignedCount": 0,
+                "reassignedCount": 0,
+                "inProgressCount": 1,
+                "closedCount": 2,
+                "escalatedCount": 0,
+            },
+        )
+
+    def test_custom_report_groups_by_paa_category_and_title(self):
+        tickets = [
+            self._create_ticket("Malipo", status=Ticket.TicketStatus.CLOSED),
+            self._create_ticket("Malipo", status=Ticket.TicketStatus.CLOSED),
+            self._create_ticket("Malipo", status=Ticket.TicketStatus.IN_PROGRESS),
+        ]
+        for ticket in tickets:
+            ticket.title = "Kukosa malipo"
+
+        with patch(
+            "grievance_social_protection.gql_queries._ticket_base_queryset",
+            return_value=tickets,
+        ), patch(
+            "grievance_social_protection.gql_queries._ticket_region_and_paa",
+            return_value=("Arusha", "arusha-cc", "Arusha CC"),
+        ):
+            response = self.gql_client.execute(
+                """
+                query {
+                  grievanceReports(report: "CUSTOM") {
+                    districtName
+                    category
+                    ticketTitle
+                    grievancesFiled
+                    inProgressCount
+                    closedCount
+                  }
+                }
+                """,
+                context=self.gql_context.get_request(),
+            )
+
+        self.assertNotIn("errors", response)
+        self.assertEqual(
+            response["data"]["grievanceReports"],
+            [
+                {
+                    "districtName": "Arusha CC",
+                    "category": "Malipo",
+                    "ticketTitle": "Kukosa malipo",
+                    "grievancesFiled": 3,
+                    "inProgressCount": 1,
+                    "closedCount": 2,
+                }
+            ],
+        )

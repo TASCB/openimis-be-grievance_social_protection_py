@@ -45,6 +45,11 @@ REPORT_RESOLUTION_STATUS = "RESOLUTION_STATUS"
 REPORT_CLOSURE_TIMELINE = "CLOSURE_TIMELINE"
 REPORT_CLOSURE_TIMELINE_BY_PAA = "CLOSURE_TIMELINE_BY_PAA"
 REPORT_OVERDUE_BY_PAA = "OVERDUE_BY_PAA"
+REPORT_PAA_SUMMARY = "PAA_SUMMARY"
+REPORT_STATUS_BY_PAA = "STATUS_BY_PAA"
+REPORT_STATUS_BY_CATEGORY = "STATUS_BY_CATEGORY"
+REPORT_STATUS_BY_CHANNEL = "STATUS_BY_CHANNEL"
+REPORT_CUSTOM = "CUSTOM"
 CATEGORY_REPORT_LAST_CATEGORY = "Maswali na Maoni"
 
 PAA_GRIEVANCE_FILTER_WITHOUT = "WITHOUT_GRIEVANCE"
@@ -144,6 +149,15 @@ class GrievanceReportRowGQLType(ObjectType):
     overdue = graphene.Boolean()
     timeline_status = graphene.String()
     time_taken_seconds = graphene.Float()
+    region_name = graphene.String()
+    district_name = graphene.String()
+    grievances_filed = graphene.Int()
+    open_count = graphene.Int()
+    assigned_count = graphene.Int()
+    reassigned_count = graphene.Int()
+    in_progress_count = graphene.Int()
+    closed_count = graphene.Int()
+    escalated_count = graphene.Int()
 
 
 class GrievanceLocationScopeGQLType(ObjectType):
@@ -410,11 +424,30 @@ def _reporter_location(ticket):
     return None
 
 
-def _ticket_paa(ticket):
+def _location_ancestor(location, location_type):
+    current = location
+    while current is not None:
+        if getattr(current, "type", None) == location_type:
+            return current
+        current = getattr(current, "parent", None)
+    return None
+
+
+def _ticket_location_parts(ticket):
     location = _reporter_location(ticket)
-    if not location:
+    district = _location_ancestor(location, "D")
+    region = _location_ancestor(location, "R")
+
+    # Some deployments store the PAA directly without a typed ancestry tree.
+    paa = district or location
+    return region, paa
+
+
+def _ticket_paa(ticket):
+    _region, paa = _ticket_location_parts(ticket)
+    if not paa:
         return "unassigned", _("Unassigned")
-    return _location_identifier(location), _location_name(location)
+    return _location_identifier(paa), _location_name(paa)
 
 
 def _ticket_matches_paa(ticket, paa_id):
@@ -422,10 +455,12 @@ def _ticket_matches_paa(ticket, paa_id):
         return True
     ticket_paa_id, _ = _ticket_paa(ticket)
     location = _reporter_location(ticket)
+    region, district = _ticket_location_parts(ticket)
     possible_values = {str(ticket_paa_id)}
-    if location:
-        possible_values.add(str(getattr(location, "id", "")))
-        possible_values.add(str(getattr(location, "uuid", "")))
+    for candidate in (location, district, region):
+        if candidate:
+            possible_values.add(str(getattr(candidate, "id", "")))
+            possible_values.add(str(getattr(candidate, "uuid", "")))
     return str(paa_id) in possible_values
 
 
@@ -569,6 +604,193 @@ def _resolution_status_rows(tickets):
         counters,
         "status",
     )
+
+
+def _legacy_status_bucket(ticket):
+    status = str(ticket.status or "").upper().replace(" ", "_").replace("-", "_")
+    if status in {"CLOSED", "RESOLVED"}:
+        return "closed"
+    if status in {"ESCALATED", "ESCALATED_TO_TMU", "TMU"}:
+        return "escalated"
+    if status in {"REASSIGNED", "RE_ASSIGNED"}:
+        return "reassigned"
+    if status in {"ASSIGNED"}:
+        return "assigned"
+    if status in {"IN_PROGRESS", "ON_PROGRESS"}:
+        return "in_progress"
+    return "open"
+
+
+def _legacy_status_counts(tickets):
+    counts = {
+        "open": 0,
+        "assigned": 0,
+        "reassigned": 0,
+        "in_progress": 0,
+        "closed": 0,
+        "escalated": 0,
+    }
+    for ticket in tickets:
+        counts[_legacy_status_bucket(ticket)] += 1
+    return counts
+
+
+def _legacy_status_row(report, tickets, **values):
+    status_counts = _legacy_status_counts(tickets)
+    return GrievanceReportRowGQLType(
+        report=report,
+        count=len(tickets),
+        grievances_filed=len(tickets),
+        open_count=status_counts["open"],
+        assigned_count=status_counts["assigned"],
+        reassigned_count=status_counts["reassigned"],
+        in_progress_count=status_counts["in_progress"],
+        closed_count=status_counts["closed"],
+        escalated_count=status_counts["escalated"],
+        **values,
+    )
+
+
+def _group_tickets(tickets, key_getter):
+    grouped = defaultdict(list)
+    for ticket in tickets:
+        grouped[key_getter(ticket)].append(ticket)
+    return grouped
+
+
+def _ticket_region_and_paa(ticket):
+    region, paa = _ticket_location_parts(ticket)
+    return (
+        _location_name(region) or _("Unassigned"),
+        _location_identifier(paa) or "unassigned",
+        _location_name(paa) or _("Unassigned"),
+    )
+
+
+def _paa_summary_rows(tickets):
+    groups = _group_tickets(tickets, _ticket_region_and_paa)
+    rows = []
+    for (region_name, paa_id, paa_name), grouped_tickets in sorted(
+        groups.items(), key=lambda item: (item[0][0], item[0][2])
+    ):
+        rows.append(
+            GrievanceReportRowGQLType(
+                report=REPORT_PAA_SUMMARY,
+                label=paa_name,
+                count=len(grouped_tickets),
+                grievances_filed=len(grouped_tickets),
+                region_name=region_name,
+                district_name=paa_name,
+                paa_id=paa_id,
+                paa_name=paa_name,
+            )
+        )
+    return rows
+
+
+def _status_by_paa_rows(tickets):
+    def group_key(ticket):
+        region_name, paa_id, paa_name = _ticket_region_and_paa(ticket)
+        return region_name, paa_id, paa_name, _clean_dimension_name(ticket.category)
+
+    groups = _group_tickets(tickets, group_key)
+    rows = []
+    for (region_name, paa_id, paa_name, category), grouped_tickets in sorted(
+        groups.items(), key=lambda item: (item[0][2], item[0][3])
+    ):
+        rows.append(
+            _legacy_status_row(
+                REPORT_STATUS_BY_PAA,
+                grouped_tickets,
+                label=f"{paa_name} - {category}",
+                region_name=region_name,
+                district_name=paa_name,
+                paa_id=paa_id,
+                paa_name=paa_name,
+                category=category,
+            )
+        )
+    return rows
+
+
+def _status_by_dimension_rows(report, tickets, dimension, configured_names=None):
+    groups = _group_tickets(
+        tickets,
+        lambda ticket: _clean_dimension_name(getattr(ticket, dimension, None)),
+    )
+    names = _ordered_dimension_names(configured_names or [], groups.keys())
+    rows = []
+    for name in names:
+        values = {dimension: name, "label": name}
+        rows.append(_legacy_status_row(report, groups.get(name, []), **values))
+    return rows
+
+
+def _status_by_category_rows(tickets):
+    configured_names = _configured_dimension_names(
+        GrievanceCategory,
+        TicketConfig.grievance_types,
+    )
+    rows = _status_by_dimension_rows(
+        REPORT_STATUS_BY_CATEGORY,
+        tickets,
+        "category",
+        configured_names,
+    )
+    last_category = CATEGORY_REPORT_LAST_CATEGORY.casefold()
+    return sorted(
+        rows,
+        key=lambda row: _clean_dimension_name(row.category).casefold() == last_category,
+    )
+
+
+def _status_by_channel_rows(tickets):
+    configured_names = _configured_dimension_names(
+        GrievanceChannel,
+        TicketConfig.grievance_channels,
+    )
+    return _status_by_dimension_rows(
+        REPORT_STATUS_BY_CHANNEL,
+        tickets,
+        "channel",
+        configured_names,
+    )
+
+
+def _custom_report_rows(tickets):
+    def group_key(ticket):
+        region_name, paa_id, paa_name = _ticket_region_and_paa(ticket)
+        return (
+            region_name,
+            paa_id,
+            paa_name,
+            _clean_dimension_name(ticket.category),
+            _clean_dimension_name(ticket.title),
+        )
+
+    groups = _group_tickets(tickets, group_key)
+    rows = []
+    for (
+        region_name,
+        paa_id,
+        paa_name,
+        category,
+        ticket_title,
+    ), grouped_tickets in sorted(groups.items(), key=lambda item: item[0][2:]):
+        rows.append(
+            _legacy_status_row(
+                REPORT_CUSTOM,
+                grouped_tickets,
+                label=ticket_title,
+                region_name=region_name,
+                district_name=paa_name,
+                paa_id=paa_id,
+                paa_name=paa_name,
+                category=category,
+                ticket_title=ticket_title,
+            )
+        )
+    return rows
 
 
 def _closure_timeline_rows(report, tickets):
@@ -749,6 +971,8 @@ def _paa_candidates(user, paa_id=None):
     field_names = _model_field_names(Location)
     if "is_deleted" in field_names:
         queryset = queryset.filter(is_deleted=False)
+    if "type" in field_names:
+        queryset = queryset.filter(type="D")
 
     if paa_id:
         identifier_filter = Q(id=paa_id)
@@ -783,6 +1007,16 @@ def resolve_grievance_report_rows(
 
     if report == REPORT_CATEGORY:
         return _category_rows(tickets)
+    if report == REPORT_PAA_SUMMARY:
+        return _paa_summary_rows(tickets)
+    if report == REPORT_STATUS_BY_PAA:
+        return _status_by_paa_rows(tickets)
+    if report == REPORT_STATUS_BY_CATEGORY:
+        return _status_by_category_rows(tickets)
+    if report == REPORT_STATUS_BY_CHANNEL:
+        return _status_by_channel_rows(tickets)
+    if report == REPORT_CUSTOM:
+        return _custom_report_rows(tickets)
     if report == REPORT_PAA_WITHOUT_GRIEVANCES:
         return _paa_grievance_count_rows(
             tickets,

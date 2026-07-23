@@ -15,6 +15,26 @@ from .models import TicketAttachment
 from .location_scope import location_subtree_ids, ticket_queryset_for_user
 
 
+GRIEVANCE_CONFIG_PERMISSION_FIELDS = (
+    "gql_query_tickets_perms",
+    "gql_mutation_create_tickets_perms",
+    "gql_mutation_update_tickets_perms",
+)
+
+
+def can_access_grievance_config(user):
+    if (
+        user is None
+        or isinstance(user, AnonymousUser)
+        or not getattr(user, "is_authenticated", False)
+    ):
+        return False
+    return any(
+        user.has_perms(TicketConfig.permissions(field))
+        for field in GRIEVANCE_CONFIG_PERMISSION_FIELDS
+    )
+
+
 class Query(graphene.ObjectType):
     tickets = OrderedDjangoFilterConnectionField(
         TicketGQLType,
@@ -248,11 +268,7 @@ class Query(graphene.ObjectType):
 
     def resolve_grievance_config(self, info, **kwargs):
         user = info.context.user
-        if type(user) is AnonymousUser:
-            raise PermissionDenied(_("unauthorized"))
-        if not info.context.user.has_perms(
-            TicketConfig.permissions("gql_query_tickets_perms")
-        ):
+        if not can_access_grievance_config(user):
             raise PermissionDenied(_("unauthorized"))
         return GrievanceTypeConfigurationGQLType()
 

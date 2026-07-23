@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import PermissionDenied
 from django.test import SimpleTestCase
 from graphene import Schema
@@ -21,6 +22,8 @@ from grievance_social_protection.schema import Mutation, Query
 
 
 class UserWithRights:
+    is_authenticated = True
+
     def __init__(self, *rights):
         self.rights = {int(right) for right in rights}
 
@@ -65,6 +68,22 @@ class GQLTicketPermissionTestCase(SimpleTestCase):
                 context=SimpleNamespace(user=UserWithRights(127000)),
             )
         )
+
+    def test_grievance_config_is_available_to_operational_users(self):
+        for right in (127000, 127001, 127002):
+            with self.subTest(right=right):
+                result = self._query_grievance_config(UserWithRights(right))
+
+                self.assertNotIn("errors", result)
+                self.assertIsNotNone(result["data"]["grievanceConfig"])
+
+    def test_grievance_config_rejects_users_without_operational_rights(self):
+        for user in (UserWithRights(), UserWithRights(127005), AnonymousUser()):
+            with self.subTest(user=type(user).__name__):
+                result = self._query_grievance_config(user)
+
+                self.assertIn("errors", result)
+                self.assertIsNone(result["data"]["grievanceConfig"])
 
     def test_update_only_processor_cannot_bypass_resolve_with_status(self):
         update_only = UserWithRights(127000, 127002)
@@ -127,6 +146,18 @@ class GQLTicketPermissionTestCase(SimpleTestCase):
         )
         self.assertIn("errors", result)
         self.assertIn("authorized", result["errors"][0]["message"].lower())
+
+    def _query_grievance_config(self, user):
+        return self.gql_client.execute(
+            """
+            query {
+              grievanceConfig {
+                grievanceTypes
+              }
+            }
+            """,
+            context=SimpleNamespace(user=user),
+        )
 
     @staticmethod
     def _update_ticket():

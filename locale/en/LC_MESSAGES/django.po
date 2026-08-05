@@ -24,8 +24,8 @@ msgstr ""
 #: grievance_social_protection/gql_mutations.py:50
 #: grievance_social_protection/gql_mutations.py:91
 #: grievance_social_protection/gql_queries.py:17
-msgid "unauthorized"
-msgstr "Unauthorized"
+msgid "grievance.unauthorized"
+msgstr "You do not have permission for this grievance operation."
 
 #: grievance_social_protection/validations.py:39
 msgid "validations.TicketValidation.validate_ticket_unique_code"

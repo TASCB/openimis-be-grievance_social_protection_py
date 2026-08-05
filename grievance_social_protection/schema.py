@@ -131,7 +131,7 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         return build_grievance_location_scope(info.context.user)
 
     def resolve_grievance_locations(
@@ -145,7 +145,7 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         return grievance_locations_for_user(
             info.context.user,
             location_type,
@@ -157,7 +157,7 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         queryset = Ticket.objects.filter(*append_validity_filter(**kwargs)).order_by(
             "title"
         )
@@ -174,7 +174,7 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         filters = []
         model = Ticket
 
@@ -238,7 +238,7 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         filters = []
 
         # Used to specify if user want to see all records including invalid records as history
@@ -269,7 +269,7 @@ class Query(graphene.ObjectType):
     def resolve_grievance_config(self, info, **kwargs):
         user = info.context.user
         if not can_access_grievance_config(user):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         return GrievanceTypeConfigurationGQLType()
 
     def resolve_grievance_types(self, info, category_id=None, is_active=None, **kwargs):
@@ -277,7 +277,7 @@ class Query(graphene.ObjectType):
         if not user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         qs = GrievanceType.objects.select_related("category").all()
         if category_id:
             _type, uuid = from_global_id(category_id)
@@ -291,7 +291,7 @@ class Query(graphene.ObjectType):
         if not user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         qs = GrievanceCategory.objects.all()
         if is_active is not None:
             qs = qs.filter(is_active=is_active)
@@ -301,7 +301,7 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         from core.utils import filter_validity
         allowed_tickets = Ticket.get_queryset(
             Ticket.objects.all(),
@@ -318,7 +318,7 @@ class Query(graphene.ObjectType):
         if not user.has_perms(
             TicketConfig.permissions("gql_query_tickets_perms")
         ):
-            raise PermissionDenied(_("unauthorized"))
+            raise PermissionDenied(_("grievance.unauthorized"))
         qs = GrievanceChannel.objects.all()
         if is_active is not None:
             qs = qs.filter(is_active=is_active)

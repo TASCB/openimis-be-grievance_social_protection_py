@@ -117,7 +117,7 @@ def check_ticket_perms(info):
     if not info.context.user.has_perms(
         TicketConfig.permissions("gql_query_tickets_perms")
     ):
-        raise PermissionDenied(_("unauthorized"))
+        raise PermissionDenied(_("grievance.unauthorized"))
 
 
 def check_comment_perms(info):

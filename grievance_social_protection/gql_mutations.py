@@ -40,7 +40,7 @@ def _context_user(info):
 
 def _require_permission(user, field):
     if user is None or not user.has_perms(TicketConfig.permissions(field)):
-        raise PermissionDenied(_("unauthorized"))
+        raise PermissionDenied(_("grievance.unauthorized"))
 
 
 def _require_comment_access(user, ticket_id):
@@ -51,7 +51,7 @@ def _require_comment_access(user, ticket_id):
         return
     if user_associated_with_ticket(user, ticket_id):
         return
-    raise PermissionDenied(_("unauthorized"))
+    raise PermissionDenied(_("grievance.unauthorized"))
 
 
 def _require_ticket_access(user, ticket_id):

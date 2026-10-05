@@ -16,8 +16,8 @@ EXTERNAL_REPORTER_TYPES = {
     "external_reporter",
     "external reporter",
 }
-DESCRIPTION_MIN_WORDS = 45
-DESCRIPTION_MAX_WORDS = 150
+DESCRIPTION_MIN_WORDS = 20
+DESCRIPTION_MAX_WORDS = 45
 
 
 class TicketValidation(BaseModelValidation):
@@ -180,9 +180,9 @@ def description_word_count(description):
 def validate_ticket_description_word_count(data):
     word_count = description_word_count(data.get("description"))
     if word_count < DESCRIPTION_MIN_WORDS:
-        return [{"message": _("Description must contain at least 45 words.")}]
+        return [{"message": _("Description must contain at least 20 words.")}]
     if word_count > DESCRIPTION_MAX_WORDS:
-        return [{"message": _("Description must not exceed 150 words.")}]
+        return [{"message": _("Description must not exceed 45 words.")}]
     return []
 
 

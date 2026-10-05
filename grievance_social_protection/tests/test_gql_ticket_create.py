@@ -240,7 +240,7 @@ class GQLTicketCreateTestCase(openIMISGraphQLTestCase):
         payload = gql_mutation_create_ticket % (
             self.category,
             self.title,
-            " ".join([f"word{i}" for i in range(1, 45)]),
+            " ".join([f"word{i}" for i in range(1, 20)]),
             self.resolution,
             self.priority,
             self.date_of_incident,
@@ -252,14 +252,14 @@ class GQLTicketCreateTestCase(openIMISGraphQLTestCase):
         _ = self.gql_client.execute(payload, context=self.gql_context.get_request())
         mutation_log = MutationLog.objects.get(client_mutation_id=mutation_id)
         self.assertTrue(mutation_log.error)
-        self.assertIn("Description must contain at least 45 words.", mutation_log.error)
+        self.assertIn("Description must contain at least 20 words.", mutation_log.error)
 
     def test_create_ticket_allows_description_at_minimum(self):
         mutation_id = "15g453h4g92h04desc2"
         payload = gql_mutation_create_ticket % (
             self.category,
             f"{self.title} Description Minimum",
-            " ".join([f"word{i}" for i in range(1, 46)]),
+            " ".join([f"word{i}" for i in range(1, 21)]),
             self.resolution,
             self.priority,
             self.date_of_incident,
@@ -277,7 +277,7 @@ class GQLTicketCreateTestCase(openIMISGraphQLTestCase):
         payload = gql_mutation_create_ticket % (
             self.category,
             f"{self.title} Description Between",
-            " ".join([f"word{i}" for i in range(1, 91)]),
+            " ".join([f"word{i}" for i in range(1, 31)]),
             self.resolution,
             self.priority,
             self.date_of_incident,
@@ -295,7 +295,7 @@ class GQLTicketCreateTestCase(openIMISGraphQLTestCase):
         payload = gql_mutation_create_ticket % (
             self.category,
             f"{self.title} Description Maximum",
-            " ".join([f"word{i}" for i in range(1, 151)]),
+            " ".join([f"word{i}" for i in range(1, 46)]),
             self.resolution,
             self.priority,
             self.date_of_incident,
@@ -313,7 +313,7 @@ class GQLTicketCreateTestCase(openIMISGraphQLTestCase):
         payload = gql_mutation_create_ticket % (
             self.category,
             self.title,
-            " ".join([f"word{i}" for i in range(1, 152)]),
+            " ".join([f"word{i}" for i in range(1, 47)]),
             self.resolution,
             self.priority,
             self.date_of_incident,
@@ -325,4 +325,4 @@ class GQLTicketCreateTestCase(openIMISGraphQLTestCase):
         _ = self.gql_client.execute(payload, context=self.gql_context.get_request())
         mutation_log = MutationLog.objects.get(client_mutation_id=mutation_id)
         self.assertTrue(mutation_log.error)
-        self.assertIn("Description must not exceed 150 words.", mutation_log.error)
+        self.assertIn("Description must not exceed 45 words.", mutation_log.error)

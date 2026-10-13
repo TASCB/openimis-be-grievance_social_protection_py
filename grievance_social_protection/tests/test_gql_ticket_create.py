@@ -6,6 +6,7 @@ from grievance_social_protection.models import Ticket
 from grievance_social_protection.schema import Query, Mutation
 from grievance_social_protection.tests.data import VALID_TICKET_DESCRIPTION
 from grievance_social_protection.tests.gql_payloads import gql_mutation_create_ticket
+from grievance_social_protection.tests.test_helpers import ensure_default_category
 from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase, BaseTestContext
 
 
@@ -26,6 +27,7 @@ class GQLTicketCreateTestCase(openIMISGraphQLTestCase):
     def setUpClass(cls):
         super(GQLTicketCreateTestCase, cls).setUpClass()
         cls.user = create_test_interactive_user(username='user_authorized', roles=[7])
+        ensure_default_category(cls.user)
 
         gql_schema = Schema(
             query=Query,

@@ -7,7 +7,7 @@ from django.contrib.contenttypes.models import ContentType
 
 from core.models import User
 from core.validation import BaseModelValidation, ObjectExistsValidationMixin
-from grievance_social_protection.models import Ticket, Comment
+from grievance_social_protection.models import Ticket, Comment, GrievanceCategory
 
 
 EXTERNAL_REPORTER_TYPES = {
@@ -35,6 +35,9 @@ class TicketValidation(BaseModelValidation):
         for error in description_errors:
             errors.append(ValidationError(error, code="description_word_count_error"))
 
+        for error in validate_ticket_category(data):
+            errors.append(ValidationError(error, code="category_unknown_error"))
+
         if errors:
             raise ValidationError(errors)
 
@@ -55,6 +58,10 @@ class TicketValidation(BaseModelValidation):
         consent_errors = validate_ticket_consent_unchanged(data)
         for error in consent_errors:
             errors.append(ValidationError(error, code="consent_immutable_error"))
+
+        if category_changed(data):
+            for error in validate_ticket_category(data):
+                errors.append(ValidationError(error, code="category_unknown_error"))
 
         if errors:
             raise ValidationError(errors)
@@ -171,6 +178,21 @@ def validate_ticket_unique_code(data):
     if ticket_queryset.exists():
         return [{"message": _("validations.TicketValidation.validate_ticket_unique_code") % {"code": code}}]
     return []
+
+
+def validate_ticket_category(data):
+    category = str(data.get("category") or "").strip()
+    known = GrievanceCategory.objects.filter(is_deleted=False, is_active=True)
+    if category and (known.filter(name=category).exists() or known.filter(code=category).exists()):
+        return []
+    return [{"message": _("Choose a grievance category from the list.")}]
+
+
+def category_changed(data):
+    if "category" not in data or not data.get("id"):
+        return False
+    current = Ticket.objects.filter(id=data.get("id")).values_list("category", flat=True).first()
+    return (current or "") != (data.get("category") or "")
 
 
 def description_word_count(description):

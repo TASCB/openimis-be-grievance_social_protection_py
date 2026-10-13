@@ -16,6 +16,7 @@ from grievance_social_protection.location_scope import (
 from grievance_social_protection.models import Ticket
 from grievance_social_protection.services import TicketService
 from grievance_social_protection.tests.data import service_add_ticket_payload
+from grievance_social_protection.tests.test_helpers import ensure_default_category
 
 
 @override_settings(ROW_SECURITY=True)
@@ -37,6 +38,7 @@ class TicketLocationTest(TestCase):
             username=f"location-open-{suffix}",
             roles=[7],
         )
+        ensure_default_category(cls.unassigned_user)
 
         cls.district_user = create_test_interactive_user(
             username=f"location-district-{suffix}",

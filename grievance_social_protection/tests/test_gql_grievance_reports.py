@@ -475,3 +475,214 @@ class GQLGrievanceReportsTestCase(openIMISGraphQLTestCase):
                 }
             ],
         )
+
+    def test_summary_report_returns_dashboard_kpis(self):
+        today = _today()
+        tickets = [
+            self._create_ticket(
+                "Summary Overdue",
+                status=Ticket.TicketStatus.RECEIVED,
+                due_date=today - timedelta(days=3),
+            ),
+            self._create_ticket(
+                "Summary Open On Time",
+                status=Ticket.TicketStatus.OPEN,
+                due_date=today + timedelta(days=3),
+            ),
+            self._create_ticket(
+                "Summary Closed On Time",
+                status=Ticket.TicketStatus.CLOSED,
+                due_date=today + timedelta(days=3),
+            ),
+            self._create_ticket(
+                "Summary Closed Late",
+                status=Ticket.TicketStatus.CLOSED,
+                due_date=today - timedelta(days=3),
+            ),
+            self._create_ticket(
+                "Summary No Timeline",
+                status=Ticket.TicketStatus.RESOLVED,
+            ),
+        ]
+
+        with patch(
+            "grievance_social_protection.gql_queries._ticket_base_queryset",
+            return_value=tickets,
+        ), patch(
+            "grievance_social_protection.gql_queries._paa_candidates",
+            return_value=[SimpleNamespace(uuid="paa-empty", name="PAA Empty")],
+        ):
+            response = self.gql_client.execute(
+                """
+                query {
+                  grievanceReports(report: "SUMMARY") {
+                    grievancesFiled
+                    openCount
+                    closedCount
+                    overdueCount
+                    resolvedOnTimeCount
+                    resolvedLateCount
+                    onTimeRate
+                    averageClosureDays
+                    paaWithoutGrievancesCount
+                  }
+                }
+                """,
+                context=self.gql_context.get_request(),
+            )
+
+        self.assertNotIn("errors", response)
+        rows = response["data"]["grievanceReports"]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertIsNotNone(row.pop("averageClosureDays"))
+        self.assertEqual(
+            row,
+            {
+                "grievancesFiled": 5,
+                "openCount": 2,
+                "closedCount": 3,
+                "overdueCount": 1,
+                "resolvedOnTimeCount": 1,
+                "resolvedLateCount": 1,
+                "onTimeRate": 50.0,
+                "paaWithoutGrievancesCount": 1,
+            },
+        )
+
+    def test_trend_report_fills_empty_months(self):
+        now = timezone.now()
+        january = now.replace(year=2026, month=1, day=15, hour=12)
+        march = now.replace(year=2026, month=3, day=10, hour=12)
+        tickets = [
+            self._create_ticket("Trend Jan"),
+            self._create_ticket("Trend Jan"),
+            self._create_ticket("Trend Mar", status=Ticket.TicketStatus.CLOSED),
+        ]
+        tickets[0].date_created = january
+        tickets[1].date_created = january
+        tickets[2].date_created = march
+        tickets[2].date_updated = march.replace(day=20)
+
+        with patch(
+            "grievance_social_protection.gql_queries._ticket_base_queryset",
+            return_value=tickets,
+        ):
+            response = self.gql_client.execute(
+                """
+                query {
+                  grievanceReports(
+                    report: "TREND",
+                    dateFrom: "2026-01-01",
+                    dateTo: "2026-04-30"
+                  ) {
+                    period
+                    periodStart
+                    periodEnd
+                    count
+                    closedCount
+                    resolvedCount
+                  }
+                }
+                """,
+                context=self.gql_context.get_request(),
+            )
+
+        self.assertNotIn("errors", response)
+        rows = response["data"]["grievanceReports"]
+        self.assertEqual(
+            [(row["period"], row["count"], row["resolvedCount"]) for row in rows],
+            [
+                ("2026-01", 2, 0),
+                ("2026-02", 0, 0),
+                ("2026-03", 1, 1),
+                ("2026-04", 0, 0),
+            ],
+        )
+        self.assertEqual(rows[1]["periodStart"], "2026-02-01")
+        self.assertEqual(rows[1]["periodEnd"], "2026-02-28")
+        self.assertEqual(rows[2]["closedCount"], 1)
+
+    def test_trend_period_helpers(self):
+        from datetime import date
+
+        from grievance_social_protection.gql_queries import (
+            TREND_PERIOD_MONTH,
+            TREND_PERIOD_WEEK,
+            _next_period_start,
+            _period_label,
+            _period_start,
+        )
+
+        self.assertEqual(
+            _next_period_start(date(2025, 12, 1), TREND_PERIOD_MONTH),
+            date(2026, 1, 1),
+        )
+        self.assertEqual(
+            _period_start(date(2026, 11, 4), TREND_PERIOD_WEEK),
+            date(2026, 11, 2),
+        )
+        self.assertEqual(_period_label(date(2026, 11, 2), TREND_PERIOD_WEEK), "2026-W45")
+        self.assertEqual(_period_label(date(2026, 12, 28), TREND_PERIOD_WEEK), "2026-W53")
+
+    def test_trend_report_rejects_unknown_period(self):
+        response = self.gql_client.execute(
+            """
+            query {
+              grievanceReports(report: "TREND", period: "YEAR") {
+                period
+              }
+            }
+            """,
+            context=self.gql_context.get_request(),
+        )
+
+        self.assertIn("errors", response)
+
+    def test_dashboard_returns_requested_sections_from_one_ticket_load(self):
+        tickets = [
+            self._create_ticket("Dashboard Category"),
+            self._create_ticket("Dashboard Category", status=Ticket.TicketStatus.CLOSED),
+        ]
+
+        with patch(
+            "grievance_social_protection.gql_queries._ticket_base_queryset",
+            return_value=tickets,
+        ) as base_queryset, patch(
+            "grievance_social_protection.gql_queries._paa_candidates",
+            return_value=[],
+        ):
+            response = self.gql_client.execute(
+                """
+                query {
+                  grievanceDashboard(
+                    reports: ["SUMMARY", "CATEGORY", "SUMMARY", "TREND"]
+                  ) {
+                    report
+                    rows {
+                      category
+                      count
+                      grievancesFiled
+                      closedCount
+                    }
+                  }
+                }
+                """,
+                context=self.gql_context.get_request(),
+            )
+
+        self.assertNotIn("errors", response)
+        self.assertEqual(base_queryset.call_count, 1)
+        sections = {
+            section["report"]: section["rows"]
+            for section in response["data"]["grievanceDashboard"]
+        }
+        self.assertEqual(
+            [section["report"] for section in response["data"]["grievanceDashboard"]],
+            ["SUMMARY", "CATEGORY", "TREND"],
+        )
+        self.assertEqual(sections["SUMMARY"][0]["grievancesFiled"], 2)
+        self.assertEqual(sections["SUMMARY"][0]["closedCount"], 1)
+        category_counts = {row["category"]: row["count"] for row in sections["CATEGORY"]}
+        self.assertEqual(category_counts["Dashboard Category"], 2)
+        self.assertEqual(sum(row["count"] for row in sections["TREND"]), 2)

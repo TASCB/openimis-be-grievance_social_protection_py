@@ -27,6 +27,10 @@ msgstr ""
 msgid "grievance.unauthorized"
 msgstr "You do not have permission for this grievance operation."
 
+#: grievance_social_protection/gql_mutations.py
+msgid "grievance.sensitive_closure_by_handler"
+msgstr "A sensitive grievance must be closed by someone other than its attending staff."
+
 #: grievance_social_protection/validations.py:39
 msgid "validations.TicketValidation.validate_ticket_unique_code"
 msgstr "Ticket %(code) already exists."

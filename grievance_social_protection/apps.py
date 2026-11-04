@@ -19,6 +19,11 @@ DEFAULT_CFG = {
     "gql_mutation_delete_tickets_perms": ["127003"],
     "gql_mutation_create_comment_perms": ["127005"],
     "gql_mutation_resolve_grievance_perms": ["127006"],
+    # Sensitive tickets (matching priority or flag) also need this to be resolved/closed, and their
+    # attending staff can never close them (independent checker).
+    "gql_mutation_approve_sensitive_closure_perms": ["127007"],
+    "sensitive_closure_priorities": ["Critical", "High"],
+    "sensitive_closure_flags": [],
     "tickets_attachments_root_path": None,
     "grievance_types": [DEFAULT_STRING, "Category A", "Category B"],
     "grievance_flags": [DEFAULT_STRING, "Flag A", "Flag B"],
@@ -47,6 +52,9 @@ class TicketConfig(AppConfig):
     gql_mutation_delete_tickets_perms = []
     gql_mutation_resolve_grievance_perms = []
     gql_mutation_create_comment_perms = []
+    gql_mutation_approve_sensitive_closure_perms = []
+    sensitive_closure_priorities = DEFAULT_CFG["sensitive_closure_priorities"]
+    sensitive_closure_flags = DEFAULT_CFG["sensitive_closure_flags"]
     tickets_attachments_root_path = None
 
     grievance_types = []

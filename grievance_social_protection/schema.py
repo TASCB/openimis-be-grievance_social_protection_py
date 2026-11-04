@@ -107,9 +107,28 @@ class Query(graphene.ObjectType):
         paa_id=graphene.String(),
         paa_grievance_filter=graphene.String(),
         grievance_count=graphene.Int(),
+        period=graphene.String(
+            description="TREND report bucket: DAY, WEEK or MONTH (default)"
+        ),
         description=(
             "Aggregated grievance reports with optional date, agent, PAA, "
             "and PAA grievance-count filters"
+        ),
+    )
+
+    grievance_dashboard = graphene.List(
+        GrievanceDashboardSectionGQLType,
+        reports=graphene.List(graphene.String, required=True),
+        date_from=graphene.Date(),
+        date_to=graphene.Date(),
+        agent_id=graphene.String(),
+        paa_id=graphene.String(),
+        paa_grievance_filter=graphene.String(),
+        grievance_count=graphene.Int(),
+        period=graphene.String(),
+        description=(
+            "Several grievance reports computed from one ticket load; "
+            "accepts the same filters as grievanceReports"
         ),
     )
 
@@ -326,6 +345,9 @@ class Query(graphene.ObjectType):
 
     def resolve_grievance_reports(self, info, **kwargs):
         return resolve_grievance_report_rows(info, **kwargs)
+
+    def resolve_grievance_dashboard(self, info, **kwargs):
+        return resolve_grievance_dashboard_sections(info, **kwargs)
 
 
 class Mutation(graphene.ObjectType):

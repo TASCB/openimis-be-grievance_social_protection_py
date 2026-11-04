@@ -26,6 +26,7 @@ from .services import (
 )
 from .validations import user_associated_with_ticket
 from .location_scope import ensure_ticket_access
+from .sensitive_closure import is_sensitive, sensitive_after_update, ticket_is_sensitive
 
 
 TERMINAL_TICKET_STATUSES = {
@@ -58,6 +59,30 @@ def _require_ticket_access(user, ticket_id):
     ticket = Ticket.objects.filter(id=ticket_id).first()
     ensure_ticket_access(user, ticket)
     return ticket
+
+
+def _require_sensitive_closure_approval(user, ticket=None, **data):
+    """Resolving/closing a sensitive ticket needs the approval right, and not as its own handler.
+
+    Sensitive before or after this mutation's priority/flags changes counts, so a ticket cannot be
+    downgraded and closed in one step.
+    """
+    if ticket is not None:
+        sensitive = ticket_is_sensitive(ticket) or sensitive_after_update(ticket, data)
+    else:
+        sensitive = is_sensitive(data.get("priority"), data.get("flags"))
+    if not sensitive:
+        return
+    _require_permission(user, "gql_mutation_approve_sensitive_closure_perms")
+    if ticket is not None and ticket.attending_staff_id is not None \
+            and ticket.attending_staff_id == getattr(user, "id", None):
+        raise PermissionDenied(_("grievance.sensitive_closure_by_handler"))
+
+
+def _require_sensitivity_kept(user, ticket, **data):
+    """Only a sensitive-closure approver may change priority/flags so a sensitive ticket no longer is."""
+    if ticket_is_sensitive(ticket) and not sensitive_after_update(ticket, data):
+        _require_permission(user, "gql_mutation_approve_sensitive_closure_perms")
 
 
 class CreateTicketInputType(OpenIMISMutation.Input):
@@ -147,6 +172,7 @@ class CreateTicketMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
         _require_permission(user, "gql_mutation_create_tickets_perms")
         if data.get("status") in TERMINAL_TICKET_STATUSES:
             _require_permission(user, "gql_mutation_resolve_grievance_perms")
+            _require_sensitive_closure_approval(user, **data)
 
     @classmethod
     def mutate_and_get_payload(cls, root, info, **data):
@@ -189,10 +215,12 @@ class UpdateTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     @classmethod
     def _authorize_update(cls, user, **data):
         _require_permission(user, "gql_mutation_update_tickets_perms")
-        if data.get("id"):
-            _require_ticket_access(user, data["id"])
+        ticket = _require_ticket_access(user, data["id"]) if data.get("id") else None
         if data.get("status") in TERMINAL_TICKET_STATUSES:
             _require_permission(user, "gql_mutation_resolve_grievance_perms")
+            _require_sensitive_closure_approval(user, ticket, **data)
+        if ticket is not None:
+            _require_sensitivity_kept(user, ticket, **data)
 
     @classmethod
     def mutate_and_get_payload(cls, root, info, **data):
@@ -293,6 +321,7 @@ class ResolveGrievanceByCommentMutation(
         comment = Comment.objects.filter(id=data.get("id")).select_related("ticket").first()
         if comment is not None:
             ensure_ticket_access(_context_user(info), comment.ticket)
+            _require_sensitive_closure_approval(_context_user(info), comment.ticket)
         return super().mutate_and_get_payload(root, info, **data)
 
     @classmethod
@@ -302,6 +331,7 @@ class ResolveGrievanceByCommentMutation(
         comment = Comment.objects.filter(id=data.get("id")).select_related("ticket").first()
         if comment is not None:
             ensure_ticket_access(user, comment.ticket)
+            _require_sensitive_closure_approval(user, comment.ticket)
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -379,14 +409,16 @@ class CloseTicketMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     @classmethod
     def mutate_and_get_payload(cls, root, info, **data):
         cls._authorize_close(_context_user(info))
-        _require_ticket_access(_context_user(info), data.get("id"))
+        ticket = _require_ticket_access(_context_user(info), data.get("id"))
+        _require_sensitive_closure_approval(_context_user(info), ticket, **data)
         return super().mutate_and_get_payload(root, info, **data)
 
     @classmethod
     def _validate_mutation(cls, user, **data):
         super()._validate_mutation(user, **data)
         cls._authorize_close(user)
-        _require_ticket_access(user, data.get("id"))
+        ticket = _require_ticket_access(user, data.get("id"))
+        _require_sensitive_closure_approval(user, ticket, **data)
 
     @classmethod
     def _mutate(cls, user, **data):

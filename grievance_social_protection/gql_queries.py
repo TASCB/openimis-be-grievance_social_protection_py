@@ -50,7 +50,15 @@ REPORT_STATUS_BY_PAA = "STATUS_BY_PAA"
 REPORT_STATUS_BY_CATEGORY = "STATUS_BY_CATEGORY"
 REPORT_STATUS_BY_CHANNEL = "STATUS_BY_CHANNEL"
 REPORT_CUSTOM = "CUSTOM"
+REPORT_SUMMARY = "SUMMARY"
+REPORT_TREND = "TREND"
 CATEGORY_REPORT_LAST_CATEGORY = "Maswali na Maoni"
+
+TREND_PERIOD_DAY = "DAY"
+TREND_PERIOD_WEEK = "WEEK"
+TREND_PERIOD_MONTH = "MONTH"
+TREND_PERIODS = {TREND_PERIOD_DAY, TREND_PERIOD_WEEK, TREND_PERIOD_MONTH}
+TREND_MAX_PERIODS = 1000
 
 PAA_GRIEVANCE_FILTER_WITHOUT = "WITHOUT_GRIEVANCE"
 PAA_GRIEVANCE_FILTER_WITH = "WITH_GRIEVANCE"
@@ -158,6 +166,22 @@ class GrievanceReportRowGQLType(ObjectType):
     in_progress_count = graphene.Int()
     closed_count = graphene.Int()
     escalated_count = graphene.Int()
+    # SUMMARY and TREND reports
+    overdue_count = graphene.Int()
+    resolved_on_time_count = graphene.Int()
+    resolved_late_count = graphene.Int()
+    on_time_rate = graphene.Float()
+    average_closure_days = graphene.Float()
+    paa_without_grievances_count = graphene.Int()
+    period = graphene.String()
+    period_start = graphene.Date()
+    period_end = graphene.Date()
+    resolved_count = graphene.Int()
+
+
+class GrievanceDashboardSectionGQLType(ObjectType):
+    report = graphene.String()
+    rows = graphene.List(GrievanceReportRowGQLType)
 
 
 class GrievanceLocationScopeGQLType(ObjectType):
@@ -988,6 +1012,156 @@ def _paa_candidates(user, paa_id=None):
     return list(queryset)
 
 
+def _summary_rows(tickets, user, paa_id=None):
+    """Single headline row for dashboard KPI tiles."""
+    today = _current_date()
+    overdue_count = 0
+    resolved_on_time_count = 0
+    resolved_late_count = 0
+    closure_days = []
+    for ticket in tickets:
+        timeline_status = ticket_timeline_status(ticket, today)
+        if ticket.status in CLOSED_STATUSES:
+            time_taken_seconds = ticket_time_taken_seconds(ticket)
+            if time_taken_seconds is not None:
+                closure_days.append(time_taken_seconds / 86400)
+            if timeline_status == TIMELINE_STATUS_RESOLVED_LATE:
+                resolved_late_count += 1
+            elif timeline_status == TIMELINE_STATUS_ON_TIME:
+                resolved_on_time_count += 1
+        elif timeline_status == TIMELINE_STATUS_OVERDUE:
+            overdue_count += 1
+
+    resolved_with_timeline = resolved_on_time_count + resolved_late_count
+    paa_without_grievances = _paa_grievance_count_rows(
+        tickets,
+        user,
+        paa_id,
+        PAA_GRIEVANCE_FILTER_WITHOUT,
+    )
+    return [
+        _legacy_status_row(
+            REPORT_SUMMARY,
+            tickets,
+            label=_("All grievances"),
+            overdue_count=overdue_count,
+            resolved_on_time_count=resolved_on_time_count,
+            resolved_late_count=resolved_late_count,
+            on_time_rate=(
+                round(resolved_on_time_count * 100 / resolved_with_timeline, 2)
+                if resolved_with_timeline
+                else None
+            ),
+            average_closure_days=(
+                round(sum(closure_days) / len(closure_days), 2)
+                if closure_days
+                else None
+            ),
+            paa_without_grievances_count=len(paa_without_grievances),
+        )
+    ]
+
+
+def _normalize_trend_period(period):
+    value = (period or TREND_PERIOD_MONTH).upper()
+    if value not in TREND_PERIODS:
+        raise ValueError(f"Unsupported trend period: {value}")
+    return value
+
+
+def _period_start(value, period):
+    if period == TREND_PERIOD_MONTH:
+        return value.replace(day=1)
+    if period == TREND_PERIOD_WEEK:
+        return value - timedelta(days=value.weekday())
+    return value
+
+
+def _next_period_start(start, period):
+    if period == TREND_PERIOD_MONTH:
+        return start.replace(
+            year=start.year + start.month // 12,
+            month=start.month % 12 + 1,
+            day=1,
+        )
+    if period == TREND_PERIOD_WEEK:
+        return start + timedelta(days=7)
+    return start + timedelta(days=1)
+
+
+def _period_label(start, period):
+    if period == TREND_PERIOD_MONTH:
+        return start.strftime("%Y-%m")
+    if period == TREND_PERIOD_WEEK:
+        iso_year, iso_week, _weekday = start.isocalendar()
+        return f"{iso_year}-W{iso_week:02d}"
+    return start.isoformat()
+
+
+def _trend_rows(tickets, period=None, date_from=None, date_to=None):
+    """Grievances received per period (with current status split) and
+    grievances resolved per period. Empty periods are returned as zeros so
+    charts get a continuous axis."""
+    period = _normalize_trend_period(period)
+    received = defaultdict(list)
+    resolved = defaultdict(int)
+    for ticket in tickets:
+        received_date = _local_date(ticket.date_created)
+        if received_date:
+            received[_period_start(received_date, period)].append(ticket)
+        closed_at = ticket_closed_at(ticket)
+        if closed_at:
+            resolved[_period_start(_local_date(closed_at), period)] += 1
+
+    known_periods = set(received) | set(resolved)
+    if date_from:
+        first = _period_start(date_from, period)
+    elif received:
+        first = min(received)
+    else:
+        return []
+    if date_to:
+        last = _period_start(date_to, period)
+    elif known_periods:
+        last = max(known_periods)
+    else:
+        last = _period_start(_current_date(), period)
+
+    rows = []
+    start = first
+    while start <= last:
+        if len(rows) >= TREND_MAX_PERIODS:
+            raise ValueError(
+                f"Trend range exceeds {TREND_MAX_PERIODS} periods; "
+                "narrow the dates or use a larger period"
+            )
+        next_start = _next_period_start(start, period)
+        label = _period_label(start, period)
+        rows.append(
+            _legacy_status_row(
+                REPORT_TREND,
+                received.get(start, []),
+                label=label,
+                period=label,
+                period_start=start,
+                period_end=next_start - timedelta(days=1),
+                resolved_count=resolved.get(start, 0),
+            )
+        )
+        start = next_start
+    return rows
+
+
+def _report_tickets(info, date_from=None, date_to=None, agent_id=None, paa_id=None):
+    check_ticket_perms(info)
+    tickets = list(
+        _ticket_base_queryset(info.context.user, date_from, date_to, agent_id)
+    )
+    if paa_id:
+        tickets = [ticket for ticket in tickets if _ticket_matches_paa(ticket, paa_id)]
+    return tickets
+
+
 def resolve_grievance_report_rows(
     info,
     report,
@@ -997,14 +1171,69 @@ def resolve_grievance_report_rows(
     paa_id=None,
     paa_grievance_filter=None,
     grievance_count=None,
+    period=None,
 ):
-    check_ticket_perms(info)
-    tickets = list(
-        _ticket_base_queryset(info.context.user, date_from, date_to, agent_id)
+    tickets = _report_tickets(info, date_from, date_to, agent_id, paa_id)
+    return _build_report_rows(
+        report,
+        tickets,
+        info.context.user,
+        paa_id=paa_id,
+        paa_grievance_filter=paa_grievance_filter,
+        grievance_count=grievance_count,
+        period=period,
+        date_from=date_from,
+        date_to=date_to,
     )
-    if paa_id:
-        tickets = [ticket for ticket in tickets if _ticket_matches_paa(ticket, paa_id)]
 
+
+def resolve_grievance_dashboard_sections(
+    info,
+    reports,
+    date_from=None,
+    date_to=None,
+    agent_id=None,
+    paa_id=None,
+    paa_grievance_filter=None,
+    grievance_count=None,
+    period=None,
+):
+    """Several reports from a single ticket load, for the dashboard page."""
+    tickets = _report_tickets(info, date_from, date_to, agent_id, paa_id)
+    return [
+        GrievanceDashboardSectionGQLType(
+            report=report,
+            rows=_build_report_rows(
+                report,
+                tickets,
+                info.context.user,
+                paa_id=paa_id,
+                paa_grievance_filter=paa_grievance_filter,
+                grievance_count=grievance_count,
+                period=period,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+        )
+        for report in dict.fromkeys(reports or [])
+    ]
+
+
+def _build_report_rows(
+    report,
+    tickets,
+    user,
+    paa_id=None,
+    paa_grievance_filter=None,
+    grievance_count=None,
+    period=None,
+    date_from=None,
+    date_to=None,
+):
+    if report == REPORT_SUMMARY:
+        return _summary_rows(tickets, user, paa_id)
+    if report == REPORT_TREND:
+        return _trend_rows(tickets, period, date_from, date_to)
     if report == REPORT_CATEGORY:
         return _category_rows(tickets)
     if report == REPORT_PAA_SUMMARY:
@@ -1020,7 +1249,7 @@ def resolve_grievance_report_rows(
     if report == REPORT_PAA_WITHOUT_GRIEVANCES:
         return _paa_grievance_count_rows(
             tickets,
-            info.context.user,
+            user,
             paa_id,
             paa_grievance_filter,
             grievance_count,
@@ -1034,7 +1263,7 @@ def resolve_grievance_report_rows(
     if report == REPORT_CLOSURE_TIMELINE_BY_PAA:
         return _closure_timeline_rows(report, tickets)
     if report == REPORT_OVERDUE_BY_PAA:
-        return _overdue_by_paa_rows(tickets, info.context.user, paa_id)
+        return _overdue_by_paa_rows(tickets, user, paa_id)
 
     return []
 

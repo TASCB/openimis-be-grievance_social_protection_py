@@ -12,6 +12,7 @@ from grievance_social_protection.models import Ticket
 from grievance_social_protection.schema import Mutation, Query
 from grievance_social_protection.services import TicketService
 from grievance_social_protection.tests.data import service_add_ticket_payload
+from grievance_social_protection.tests.test_helpers import ensure_default_category
 
 
 EXTERNAL_REPORTER_DESCRIPTION = " ".join(
@@ -71,6 +72,7 @@ class GQLTicketExternalReporterTestCase(openIMISGraphQLTestCase):
             username=f"external-reporter-{suffix}",
             roles=[7],
         )
+        ensure_default_category(cls.user)
         cls.village = create_test_village(
             {"code": f"ER-{suffix}", "name": f"External Reporter Village {suffix}"}
         )

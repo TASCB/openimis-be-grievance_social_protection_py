@@ -13,6 +13,7 @@ from django.utils.translation import gettext_lazy as _
 from .gql_queries import GrievanceTypeGQL, GrievanceCategoryGQL, GrievanceChannelGQL
 from .models import TicketAttachment
 from .location_scope import location_subtree_ids, ticket_queryset_for_user
+from .household_complainant import search_household_beneficiaries
 
 
 GRIEVANCE_CONFIG_PERMISSION_FIELDS = (
@@ -131,6 +132,20 @@ class Query(graphene.ObjectType):
             "accepts the same filters as grievanceReports"
         ),
     )
+
+    grievance_household_complainants = graphene.List(
+        HouseholdComplainantGQLType,
+        benefit_plan_id=graphene.String(required=True),
+        search=graphene.String(),
+        description="Households of a household programme, searched by HHID or representative/head name",
+    )
+
+    def resolve_grievance_household_complainants(self, info, benefit_plan_id, search=None, **kwargs):
+        user = info.context.user
+        if not any(user.has_perms(TicketConfig.permissions(p)) for p in (
+                "gql_mutation_create_tickets_perms", "gql_mutation_update_tickets_perms")):
+            raise PermissionDenied(_("grievance.unauthorized"))
+        return search_household_beneficiaries(info.context.user, benefit_plan_id, search)
 
     def resolve_comments(self, info, **kwargs):
         user = info.context.user

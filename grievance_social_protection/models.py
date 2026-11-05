@@ -12,9 +12,10 @@ from core.models import HistoryBusinessModel, User, HistoryModel
 def check_if_user_or_individual(generic_field):
     individual = apps.get_model("individual", "Individual")
     beneficiary = apps.get_model("social_protection", "Beneficiary")
-    if not isinstance(generic_field, (User, individual, beneficiary)):
+    household = apps.get_model("social_protection", "GroupBeneficiary")
+    if not isinstance(generic_field, (User, individual, beneficiary, household)):
         raise ValueError(
-            "Reporter must be either a User or a Beneficiary or an Individual."
+            "Reporter must be either a User, a Beneficiary, a Household or an Individual."
         )
 
 

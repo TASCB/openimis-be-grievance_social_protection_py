@@ -28,6 +28,7 @@ from core.gql_queries import UserGQLType
 from location.gql_queries import LocationGQLType
 from .apps import TicketConfig
 from .models import Ticket, Comment, TicketAttachment
+from .household_complainant import GROUP_BENEFICIARY_TYPE, household_summary
 from core import prefix_filterset, ExtendedConnection, filter_validity
 from .util import model_obj_to_json
 from .models import GrievanceType, GrievanceCategory, GrievanceChannel
@@ -1268,6 +1269,13 @@ def _build_report_rows(
     return []
 
 
+class HouseholdComplainantGQLType(ObjectType):
+    id = graphene.String()
+    hhid = graphene.String()
+    representative = graphene.String()
+    head = graphene.String()
+
+
 class TicketGQLType(DjangoObjectType):
     # TODO on resolve check filters and remove anonymized so user can't fetch ticket using last_name if not visible
     client_mutation_id = graphene.String()
@@ -1279,6 +1287,7 @@ class TicketGQLType(DjangoObjectType):
     reporter_first_name = graphene.String()
     reporter_last_name = graphene.String()
     reporter_dob = graphene.String()
+    reporter_household = graphene.Field(HouseholdComplainantGQLType)
     event_location = graphene.Field(LocationGQLType)
     region = graphene.Field(LocationGQLType)
     district = graphene.Field(LocationGQLType)
@@ -1412,6 +1421,9 @@ class TicketGQLType(DjangoObjectType):
                         return model_object.first_name
                     elif root.reporter_type.name == "beneficiary":
                         return model_object.individual.first_name
+                    elif root.reporter_type.model == GROUP_BENEFICIARY_TYPE:
+                        summary = household_summary(model_object.group)
+                        return summary["representative"] or summary["head"]
                     elif root.reporter_type.name == "user":
                         return None
         return None
@@ -1437,6 +1449,14 @@ class TicketGQLType(DjangoObjectType):
                     elif root.reporter_type.name == "user":
                         return None
         return None
+
+    @staticmethod
+    def resolve_reporter_household(root, info):
+        check_ticket_perms(info)
+        if not root.reporter_type or root.reporter_type.model != GROUP_BENEFICIARY_TYPE:
+            return None
+        reporter = root.reporter
+        return {"id": str(reporter.id), **household_summary(reporter.group)} if reporter else None
 
     @staticmethod
     def resolve_reporter_dob(root, info):

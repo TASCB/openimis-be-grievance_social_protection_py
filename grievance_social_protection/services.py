@@ -230,7 +230,8 @@ class TicketService(BaseService):
             self._clear_external_reporter(obj_data)
             return
 
-        content_type = ContentType.objects.get(model=reporter_type.lower())
+        # A saved ticket sends back its type's display name, e.g. "group beneficiary".
+        content_type = ContentType.objects.get(model=reporter_type.lower().replace(" ", ""))
         obj_data["reporter_type"] = content_type
         self._clear_external_reporter(obj_data)
 

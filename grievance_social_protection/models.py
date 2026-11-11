@@ -13,9 +13,12 @@ def check_if_user_or_individual(generic_field):
     individual = apps.get_model("individual", "Individual")
     beneficiary = apps.get_model("social_protection", "Beneficiary")
     household = apps.get_model("social_protection", "GroupBeneficiary")
-    if not isinstance(generic_field, (User, individual, beneficiary, household)):
+    allowed = [User, individual, beneficiary, household]
+    if apps.is_installed("legacy_individual"):
+        allowed.append(apps.get_model("legacy_individual", "LegacyGroup"))
+    if not isinstance(generic_field, tuple(allowed)):
         raise ValueError(
-            "Reporter must be either a User, a Beneficiary, a Household or an Individual."
+            "Reporter must be a User, a Beneficiary, a Household, an Individual or a legacy household."
         )
 
 

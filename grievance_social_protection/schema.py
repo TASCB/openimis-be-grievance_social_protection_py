@@ -13,7 +13,7 @@ from django.utils.translation import gettext_lazy as _
 from .gql_queries import GrievanceTypeGQL, GrievanceCategoryGQL, GrievanceChannelGQL
 from .models import TicketAttachment
 from .location_scope import location_subtree_ids, ticket_queryset_for_user
-from .household_complainant import search_household_beneficiaries
+from .household_complainant import search_household_beneficiaries, search_legacy_households
 
 
 GRIEVANCE_CONFIG_PERMISSION_FIELDS = (
@@ -49,6 +49,7 @@ class Query(graphene.ObjectType):
         ward_id=graphene.Int(),
         village_id=graphene.Int(),
         overdue=graphene.Boolean(),
+        reporter_kind=graphene.String(),
     )
 
     ticketsStr = OrderedDjangoFilterConnectionField(
@@ -111,6 +112,7 @@ class Query(graphene.ObjectType):
         period=graphene.String(
             description="TREND report bucket: DAY, WEEK or MONTH (default)"
         ),
+        reporter_kind=graphene.String(description="Reporter Type, e.g. legacygroup for PSSN I & II households"),
         description=(
             "Aggregated grievance reports with optional date, agent, PAA, "
             "and PAA grievance-count filters"
@@ -127,6 +129,7 @@ class Query(graphene.ObjectType):
         paa_grievance_filter=graphene.String(),
         grievance_count=graphene.Int(),
         period=graphene.String(),
+        reporter_kind=graphene.String(),
         description=(
             "Several grievance reports computed from one ticket load; "
             "accepts the same filters as grievanceReports"
@@ -139,6 +142,19 @@ class Query(graphene.ObjectType):
         search=graphene.String(),
         description="Households of a household programme, searched by HHID or representative/head name",
     )
+
+    grievance_legacy_household_complainants = graphene.List(
+        LegacyHouseholdComplainantGQLType,
+        search=graphene.String(),
+        description="PSSN I & II households in the legacy registry, by household number, phone or head name",
+    )
+
+    def resolve_grievance_legacy_household_complainants(self, info, search=None, **kwargs):
+        user = info.context.user
+        if not any(user.has_perms(TicketConfig.permissions(p)) for p in (
+                "gql_mutation_create_tickets_perms", "gql_mutation_update_tickets_perms")):
+            raise PermissionDenied(_("grievance.unauthorized"))
+        return search_legacy_households(user, search)
 
     def resolve_grievance_household_complainants(self, info, benefit_plan_id, search=None, **kwargs):
         user = info.context.user
@@ -234,6 +250,10 @@ class Query(graphene.ObjectType):
         )
         if location_id:
             filters.append(Q(event_location_id__in=location_subtree_ids(location_id)))
+
+        reporter_kind = (kwargs.get("reporter_kind") or "").strip().lower()
+        if reporter_kind:
+            filters.append(reporter_kind_filter(reporter_kind))
 
         # Used to specify if user want to see all records including invalid records as history
         show_history = kwargs.get("show_history", False)

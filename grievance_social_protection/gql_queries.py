@@ -28,7 +28,9 @@ from core.gql_queries import UserGQLType
 from location.gql_queries import LocationGQLType
 from .apps import TicketConfig
 from .models import Ticket, Comment, TicketAttachment
-from .household_complainant import GROUP_BENEFICIARY_TYPE, household_summary
+from .household_complainant import (
+    GROUP_BENEFICIARY_TYPE, LEGACY_HOUSEHOLD_TYPE, household_summary, legacy_household_summary,
+)
 from core import prefix_filterset, ExtendedConnection, filter_validity
 from .util import model_obj_to_json
 from .models import GrievanceType, GrievanceCategory, GrievanceChannel
@@ -50,6 +52,7 @@ REPORT_PAA_SUMMARY = "PAA_SUMMARY"
 REPORT_STATUS_BY_PAA = "STATUS_BY_PAA"
 REPORT_STATUS_BY_CATEGORY = "STATUS_BY_CATEGORY"
 REPORT_STATUS_BY_CHANNEL = "STATUS_BY_CHANNEL"
+REPORT_STATUS_BY_TYPE = "STATUS_BY_TYPE"
 REPORT_CUSTOM = "CUSTOM"
 REPORT_SUMMARY = "SUMMARY"
 REPORT_TREND = "TREND"
@@ -389,7 +392,23 @@ def ticket_is_overdue(ticket, today=None):
     return ticket_timeline_status(ticket, today) == TIMELINE_STATUS_OVERDUE
 
 
-def _ticket_base_queryset(user, date_from=None, date_to=None, agent_id=None):
+REPORTER_KIND_MODELS = {
+    "individual": ["individual"],
+    "beneficiary": ["beneficiary", "groupbeneficiary"],
+    "legacygroup": ["legacygroup"],
+    "user": ["user"],
+}
+
+
+def reporter_kind_filter(kind):
+    kind = (kind or "").strip().lower()
+    if kind == "external":
+        return Q(reporter_type__isnull=True) & (
+            Q(external_reporter_first_name__isnull=False) | Q(external_reporter_last_name__isnull=False))
+    return Q(reporter_type__model__in=REPORTER_KIND_MODELS.get(kind, [kind]))
+
+
+def _ticket_base_queryset(user, date_from=None, date_to=None, agent_id=None, reporter_kind=None):
     queryset = Ticket.objects.filter(is_deleted=False).select_related(
         "attending_staff",
         "reporter_type",
@@ -410,6 +429,8 @@ def _ticket_base_queryset(user, date_from=None, date_to=None, agent_id=None):
         queryset = queryset.filter(date_created__date__lte=date_to)
     if agent_id:
         queryset = queryset.filter(attending_staff_id=agent_id)
+    if reporter_kind:
+        queryset = queryset.filter(reporter_kind_filter(reporter_kind))
     return queryset
 
 
@@ -780,6 +801,29 @@ def _status_by_channel_rows(tickets):
         "channel",
         configured_names,
     )
+
+
+def _status_by_type_rows(tickets):
+    configured = [
+        (_clean_dimension_name(category), _clean_dimension_name(name))
+        for name, category in GrievanceType.objects.filter(is_deleted=False, is_active=True)
+        .values_list("name", "category__name")
+    ]
+    groups = _group_tickets(
+        tickets,
+        lambda t: (_clean_dimension_name(t.category), _clean_dimension_name(t.title)),
+    )
+    keys = sorted(set(configured) | set(groups.keys()), key=lambda k: (k[0].casefold(), k[1].casefold()))
+    return [
+        _legacy_status_row(
+            REPORT_STATUS_BY_TYPE,
+            groups.get(key, []),
+            label=key[1],
+            category=key[0],
+            ticket_title=key[1],
+        )
+        for key in keys
+    ]
 
 
 def _custom_report_rows(tickets):
@@ -1153,10 +1197,10 @@ def _trend_rows(tickets, period=None, date_from=None, date_to=None):
     return rows
 
 
-def _report_tickets(info, date_from=None, date_to=None, agent_id=None, paa_id=None):
+def _report_tickets(info, date_from=None, date_to=None, agent_id=None, paa_id=None, reporter_kind=None):
     check_ticket_perms(info)
     tickets = list(
-        _ticket_base_queryset(info.context.user, date_from, date_to, agent_id)
+        _ticket_base_queryset(info.context.user, date_from, date_to, agent_id, reporter_kind)
     )
     if paa_id:
         tickets = [ticket for ticket in tickets if _ticket_matches_paa(ticket, paa_id)]
@@ -1173,8 +1217,9 @@ def resolve_grievance_report_rows(
     paa_grievance_filter=None,
     grievance_count=None,
     period=None,
+    reporter_kind=None,
 ):
-    tickets = _report_tickets(info, date_from, date_to, agent_id, paa_id)
+    tickets = _report_tickets(info, date_from, date_to, agent_id, paa_id, reporter_kind)
     return _build_report_rows(
         report,
         tickets,
@@ -1198,9 +1243,10 @@ def resolve_grievance_dashboard_sections(
     paa_grievance_filter=None,
     grievance_count=None,
     period=None,
+    reporter_kind=None,
 ):
     """Several reports from a single ticket load, for the dashboard page."""
-    tickets = _report_tickets(info, date_from, date_to, agent_id, paa_id)
+    tickets = _report_tickets(info, date_from, date_to, agent_id, paa_id, reporter_kind)
     return [
         GrievanceDashboardSectionGQLType(
             report=report,
@@ -1245,6 +1291,8 @@ def _build_report_rows(
         return _status_by_category_rows(tickets)
     if report == REPORT_STATUS_BY_CHANNEL:
         return _status_by_channel_rows(tickets)
+    if report == REPORT_STATUS_BY_TYPE:
+        return _status_by_type_rows(tickets)
     if report == REPORT_CUSTOM:
         return _custom_report_rows(tickets)
     if report == REPORT_PAA_WITHOUT_GRIEVANCES:
@@ -1276,6 +1324,19 @@ class HouseholdComplainantGQLType(ObjectType):
     head = graphene.String()
 
 
+class LegacyHouseholdComplainantGQLType(ObjectType):
+    id = graphene.String()
+    hhid = graphene.String()
+    head = graphene.String()
+    representative = graphene.String()
+    village = graphene.String()
+    district = graphene.String()
+    members = graphene.Int()
+    phone = graphene.String()
+    pmt_score = graphene.String()
+    programme = graphene.String()
+
+
 class TicketGQLType(DjangoObjectType):
     # TODO on resolve check filters and remove anonymized so user can't fetch ticket using last_name if not visible
     client_mutation_id = graphene.String()
@@ -1288,6 +1349,7 @@ class TicketGQLType(DjangoObjectType):
     reporter_last_name = graphene.String()
     reporter_dob = graphene.String()
     reporter_household = graphene.Field(HouseholdComplainantGQLType)
+    reporter_legacy_household = graphene.Field(LegacyHouseholdComplainantGQLType)
     event_location = graphene.Field(LocationGQLType)
     region = graphene.Field(LocationGQLType)
     district = graphene.Field(LocationGQLType)
@@ -1424,6 +1486,9 @@ class TicketGQLType(DjangoObjectType):
                     elif root.reporter_type.model == GROUP_BENEFICIARY_TYPE:
                         summary = household_summary(model_object.group)
                         return summary["representative"] or summary["head"]
+                    elif root.reporter_type.model == LEGACY_HOUSEHOLD_TYPE:
+                        summary = legacy_household_summary(model_object)
+                        return summary["representative"] or summary["head"]
                     elif root.reporter_type.name == "user":
                         return None
         return None
@@ -1457,6 +1522,14 @@ class TicketGQLType(DjangoObjectType):
             return None
         reporter = root.reporter
         return {"id": str(reporter.id), **household_summary(reporter.group)} if reporter else None
+
+    @staticmethod
+    def resolve_reporter_legacy_household(root, info):
+        check_ticket_perms(info)
+        if not root.reporter_type or root.reporter_type.model != LEGACY_HOUSEHOLD_TYPE:
+            return None
+        reporter = root.reporter
+        return legacy_household_summary(reporter) if reporter else None
 
     @staticmethod
     def resolve_reporter_dob(root, info):

@@ -76,7 +76,7 @@ def _require_sensitive_closure_approval(user, ticket=None, **data):
     _require_permission(user, "gql_mutation_approve_sensitive_closure_perms")
     if ticket is not None and ticket.attending_staff_id is not None \
             and ticket.attending_staff_id == getattr(user, "id", None):
-        raise PermissionDenied(_("grievance.sensitive_closure_by_handler"))
+        raise PermissionDenied(_("This grievance is assigned to you, so another person must close it."))
 
 
 def _require_sensitivity_kept(user, ticket, **data):

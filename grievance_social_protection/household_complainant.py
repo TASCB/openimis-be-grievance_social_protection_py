@@ -60,3 +60,80 @@ def search_household_beneficiaries(user, benefit_plan_id, search=None, limit=20)
         {"id": gb.id, **household_summary(gb.group)}
         for gb in qs.order_by("group__code")[:limit]
     ]
+
+
+LEGACY_HOUSEHOLD_TYPE = "legacygroup"
+LEGACY_PROGRAMME = "PSSN I & II"
+LEGACY_SEARCH_MIN_LENGTH = 3
+
+
+def legacy_registry_installed():
+    from django.apps import apps
+    return apps.is_installed("legacy_individual")
+
+
+def _legacy_member_name(membership):
+    if not membership:
+        return None
+    ind = membership.individual
+    return " ".join(p for p in (ind.first_name, ind.middle_name, ind.last_name) if p) or None
+
+
+def _ancestor(location, loc_type):
+    while location is not None and location.type != loc_type:
+        location = location.parent
+    return location
+
+
+def legacy_household_summary(group):
+    from legacy_individual.models import LegacyGroupIndividual
+
+    memberships = list(LegacyGroupIndividual.objects
+                       .filter(group=group, is_deleted=False)
+                       .select_related("individual"))
+    head = next((m for m in memberships if m.role == LegacyGroupIndividual.Role.HEAD), None)
+    rep = next((m for m in memberships
+                if m.recipient_type == LegacyGroupIndividual.RecipientType.PRIMARY), None)
+    ext = group.json_ext or {}
+    head_ext = ext.get("head") or {}
+    head_from_household = " ".join(
+        p for p in (head_ext.get("first_name"), head_ext.get("middle_name"), head_ext.get("last_name")) if p)
+    village = group.location
+    district = _ancestor(village, "D")
+    return {
+        "id": str(group.id),
+        "hhid": group.code,
+        "head": _legacy_member_name(head) or head_from_household or None,
+        "representative": _legacy_member_name(rep),
+        "village": village.name if village else None,
+        "district": district.name if district else None,
+        "members": len(memberships),
+        "phone": ext.get("phone_no"),
+        "pmt_score": ext.get("pmt_score"),
+        "programme": LEGACY_PROGRAMME,
+    }
+
+
+def search_legacy_households(user, search=None, limit=20):
+    if not legacy_registry_installed():
+        return []
+    search = (search or "").strip()
+    if len(search) < LEGACY_SEARCH_MIN_LENGTH:
+        return []
+    from location.models import LocationManager
+    from legacy_individual.models import LegacyGroup, LegacyGroupIndividual
+
+    qs = LegacyGroup.objects.filter(is_deleted=False)
+    if not getattr(user, "is_imis_admin", False):
+        interactive = getattr(user, "_u", user)
+        qs = qs.filter(LocationManager().build_user_location_filter_query(interactive, prefix="location"))
+    for term in search.split():
+        named_groups = (LegacyGroupIndividual.objects
+                        .filter(is_deleted=False)
+                        .filter(Q(role=LegacyGroupIndividual.Role.HEAD)
+                                | Q(recipient_type=LegacyGroupIndividual.RecipientType.PRIMARY))
+                        .filter(Q(individual__first_name__icontains=term)
+                                | Q(individual__last_name__icontains=term))
+                        .values("group_id"))
+        qs = qs.filter(Q(code__istartswith=term) | Q(json_ext__phone_no=term) | Q(id__in=named_groups))
+    return [legacy_household_summary(g) for g in qs.select_related("location").order_by("code")[:limit]]

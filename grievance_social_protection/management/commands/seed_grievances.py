@@ -3,6 +3,7 @@ from django.db import transaction
 
 from core.models import User
 from grievance_social_protection.apps import TicketConfig
+from grievance_social_protection.seed_data import GRIEVANCE_CATEGORY_SEEDS, seed_missing
 from grievance_social_protection.models import (
     GrievanceCategory,
     GrievanceChannel,
@@ -10,127 +11,13 @@ from grievance_social_protection.models import (
 )
 
 
-GRIEVANCE_CATEGORY_SEEDS = [
-    {
-        "category": "Malipo kwa walengwa wa mpango",
-        "timeline": 60,
-        "types": [
-            "Kukosa Malipo ya Ruzuku ya msingi (PCT)",
-            "Kukosa Malipo ya ajira za muda (CS-PW)",
-            "Kukosa Malipo ya Ruzuku ya Uzalishaji mali (EEI)",
-            "Malipo Pungufu ya Ruzuku ya msingi (PCT)",
-            "Malipo pungufu ya ajira za muda (CS-PW)",
-            "Malipo Pungufu ya Ruzuku ya uzalishaji mali (EEI)",
-            "Kuchelewa Malipo ya ruzuku ya msingi (PCT)",
-            "Kuchelewa Malipo ya ajira za muda (CS-PW)",
-            "Kuchelewa Malipo ya ruzuku ya uzalishaji mali (EEI)",
-            "Changamoto ya kupokea malipo",
-            "Kaya kusimamishiwa malipo (suspended from payment)",
-        ],
-    },
-    {
-        "category": "Malipo kwa wasio walengwa wa mpango",
-        "timeline": 45,
-        "types": [
-            "Kukosa malipo/kutolipwa",
-            "Kupokea malipo pungufu",
-            "Kuchelewa kwa Malipo",
-        ],
-    },
-    {
-        "category": "Utambuzi na Uhakiki wa kaya",
-        "timeline": 21,
-        "types": [
-            "Kaya kutotambuliwa kabisa",
-            "Jina la kaya kutoingizwa kwenye orodha ya awali (TF3) yaliyopendekezwa",
-            "Jina la kaya kuondolewa kwenye orodha ya mwisho (TF4) iliyopitishwa",
-            "Kaya kutoingiziwa taarifa kwenye kishkwambi/kutododoswa kwa sababu yoyote ile",
-            "Kuingizwa kwenye mpango kwa kaya isiyo na vigezo",
-            "Kaya kutokuhakikiwa / kufanyiwa tathmini",
-            "Kaya imehakikiwa haipo kwenye orodha ya malipo",
-        ],
-    },
-    {
-        "category": "Kuhuisha taarifa za walengwa",
-        "timeline": 21,
-        "types": [
-            "Mtoto aliyezaliwa kukosekana kwenye orodha ya kaya",
-            "Wanafunzi kutokuwepo kwenye orodha ya kaya",
-            "Mtoto kutokubadilishiwa kituo cha huduma",
-            "Kutofanya mabadiliko ya hadhi ya wana kaya (mfano: kuhama kaya au kifo)",
-            "Kutoingiza wanakaya wapya waliohamia",
-            "Kutobadilisha mwakilishi wa kaya",
-            "Kutorekebisha taarifa za wanakaya",
-        ],
-    },
-    {
-        "category": "Huduma zisizoridhisha",
-        "timeline": 45,
-        "types": [
-            "Malalamiko yasiyotatuliwa kwa wakati",
-            "Kukosa ushauri wa kitaalamu kuhusu kilimo, ufugaji na ujasiriamali",
-            "Utovu wa nidhamu wa watumishi",
-            "Watumishi kutumia lugha chafu",
-            "Kunyimwa haki au huduma kutokana na ubaguzi",
-        ],
-    },
-    {
-        "category": "Unyanyasaji wa kijinsia usiohusu Unyanyasaji/uonevu/udhalilishaji wa kingono",
-        "timeline": 60,
-        "types": [
-            "Matukio ya kushambuliwa kimwili",
-            "Matusi au unyanyasaji wa maneno",
-            "Ubaguzi wa kijinsia",
-            "Unyanyasaji wa kiuchumi",
-            "Changamoto za urithi",
-        ],
-    },
-    {
-        "category": "Unyanyasaji wa kijinsia unaohusu Unyanyasaji/uonevu/udhalilishaji wa kingono",
-        "timeline": 0,
-        "types": [
-            "Unyanyasaji wa kingono",
-            "Uonevu au udhalilishaji wa kingono",
-        ],
-    },
-    {
-        "category": "Mazingira",
-        "timeline": 21,
-        "types": [
-            "Udhibiti duni wa uchafuzi wa vumbi",
-            "Usimamizi duni wa taka",
-            "Ukosefu wa vifaakinga vya kutosha (PPE)",
-            "Kuumia wakati wa kazi na kutopata huduma stahiki za kitabibu",
-        ],
-    },
-    {
-        "category": "Maswala ya Ardhi",
-        "timeline": 60,
-        "types": [
-            "Migogoro ya umiliki wa ardhi iliyotwaliwa",
-            "Migogoro kuhusu ukubwa wa ardhi",
-            "Migogoro ya mipaka ya ardhi",
-        ],
-    },
-    {
-        "category": "Maswali, mahitaji na maoni",
-        "timeline": 14,
-        "types": [
-            "Maswali, mapendekezo, au mashaka kuhusu programu",
-            "Kukosa kitambulisho au namba za NIDA",
-            "Kukosa mikopo elimu ya juu",
-            "Maulizo kuhusu taratibu za mpango",
-            "Kusahau neno la siri la akaunti",
-            "Kutopata kadi ya bima ya afya baada ya kukamilisha malipo",
-            "Utapeli",
-            "Kupoteza simu kadi au kadi ya benki",
-        ],
-    },
-]
 
 
 class Command(BaseCommand):
-    help = "Reset and seed grievance types and categories"
+    help = (
+        "Add the grievance categories, types and channels TASAF starts with that are missing. "
+        "With --reset, delete all categories and types first and create them again."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -138,6 +25,11 @@ class Command(BaseCommand):
             type=str,
             default="Admin",
             help="Username to use for audit trail (default: Admin)",
+        )
+        parser.add_argument(
+            "--reset",
+            action="store_true",
+            help="Delete every category and type first (tickets keep their own copy of the category name)",
         )
 
     def handle(self, *args, **kwargs):
@@ -152,6 +44,18 @@ class Command(BaseCommand):
             return
 
         self.stdout.write(f"Seeding with user: {username}")
+
+        if not kwargs["reset"]:
+            with transaction.atomic():
+                added = seed_missing(
+                    GrievanceCategory, GrievanceType, GrievanceChannel, user,
+                    TicketConfig.grievance_channels, log=self.stdout.write,
+                )
+            self.stdout.write(self.style.SUCCESS(
+                f"Done: {added['categories']} categories, {added['types']} types and "
+                f"{added['channels']} channels added; existing ones left as they are."
+            ))
+            return
 
         with transaction.atomic():
             deleted_types = GrievanceType.objects.count()

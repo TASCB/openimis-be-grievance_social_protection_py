@@ -359,6 +359,8 @@ class GrievanceCategoryService(BaseService):
         super().__init__(user)
 
     def _adjust_create_payload(self, payload_data):
+        # the code is the backend's to give (see codes.py): whatever the client sent is ignored
+        payload_data.pop("code", None)
         payload_data["user_created"] = self.user
         payload_data["user_updated"] = self.user
         payload_data["date_created"] = TimeUtils.now()
@@ -366,6 +368,8 @@ class GrievanceCategoryService(BaseService):
         return payload_data
 
     def _adjust_update_payload(self, payload_data):
+        # a code never changes once given
+        payload_data.pop("code", None)
         payload_data["user_updated"] = self.user
         payload_data["date_updated"] = TimeUtils.now()
         return super()._adjust_update_payload(payload_data)
@@ -383,6 +387,8 @@ class GrievanceTypeService(BaseService):
         super().__init__(user)
 
     def _adjust_create_payload(self, payload_data):
+        # the code is the backend's to give (see codes.py): whatever the client sent is ignored
+        payload_data.pop("code", None)
         payload_data["user_created"] = self.user
         payload_data["user_updated"] = self.user
         payload_data["date_created"] = TimeUtils.now()
@@ -390,6 +396,8 @@ class GrievanceTypeService(BaseService):
         return payload_data
 
     def _adjust_update_payload(self, payload_data):
+        # a code never changes once given
+        payload_data.pop("code", None)
         payload_data["user_updated"] = self.user
         payload_data["date_updated"] = TimeUtils.now()
         return super()._adjust_update_payload(payload_data)
@@ -407,6 +415,8 @@ class GrievanceChannelService(BaseService):
         super().__init__(user)
 
     def _adjust_create_payload(self, payload_data):
+        # the code is the backend's to give (see codes.py): whatever the client sent is ignored
+        payload_data.pop("code", None)
         payload_data["user_created"] = self.user
         payload_data["user_updated"] = self.user
         payload_data["date_created"] = TimeUtils.now()
@@ -414,6 +424,8 @@ class GrievanceChannelService(BaseService):
         return payload_data
 
     def _adjust_update_payload(self, payload_data):
+        # a code never changes once given
+        payload_data.pop("code", None)
         payload_data["user_updated"] = self.user
         payload_data["date_updated"] = TimeUtils.now()
         return super()._adjust_update_payload(payload_data)

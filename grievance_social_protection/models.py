@@ -7,6 +7,7 @@ from django.db import models
 from graphql import ResolveInfo
 from core import models as core_models
 from core.models import HistoryBusinessModel, User, HistoryModel
+from grievance_social_protection.codes import PREFIXES, missing_code, next_code
 
 
 def check_if_user_or_individual(generic_field):
@@ -238,6 +239,12 @@ class GrievanceCategory(core_models.UUIDModel, HistoryBusinessModel):
     class Meta:
         db_table = "grievance_GrievanceCategory"
 
+    def save(self, *args, **kwargs):
+        # the backend gives the code on first save; people never type it
+        if missing_code(self.code):
+            self.code = next_code(type(self), PREFIXES[type(self).__name__])
+        return super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
@@ -258,6 +265,12 @@ class GrievanceType(core_models.UUIDModel, HistoryBusinessModel):
         db_table = "grievance_GrievanceType"
         unique_together = ("category", "name")
 
+    def save(self, *args, **kwargs):
+        # the backend gives the code on first save; people never type it
+        if missing_code(self.code):
+            self.code = next_code(type(self), PREFIXES[type(self).__name__])
+        return super().save(*args, **kwargs)
+
     def __str__(self):
         if self.category:
             return f"{self.category.name} - {self.name}"
@@ -271,6 +284,12 @@ class GrievanceChannel(core_models.UUIDModel, HistoryBusinessModel):
 
     class Meta:
         db_table = "grievance_GrievanceChannel"
+
+    def save(self, *args, **kwargs):
+        # the backend gives the code on first save; people never type it
+        if missing_code(self.code):
+            self.code = next_code(type(self), PREFIXES[type(self).__name__])
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
